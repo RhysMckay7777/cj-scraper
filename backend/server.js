@@ -1,12 +1,7 @@
 const express = require('express');
 const cors = require('cors');
-const puppeteer = require('puppeteer-extra');
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-const chromium = require('@sparticuz/chromium');
+const puppeteer = require('puppeteer');
 require('dotenv').config();
-
-// Enable stealth mode to bypass bot detection
-puppeteer.use(StealthPlugin());
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -79,21 +74,24 @@ function isRelevantProduct(productTitle, searchTerm) {
 
 // Scrape CJDropshipping
 async function scrapeCJDropshipping(searchTerm, options = {}) {
-  // Configure chromium for serverless environment
-  chromium.setHeadlessMode = true;
-  chromium.setGraphicsMode = false;
-
   const browser = await puppeteer.launch({
-    args: chromium.args,
-    defaultViewport: chromium.defaultViewport,
-    executablePath: await chromium.executablePath(),
-    headless: chromium.headless,
+    headless: 'new',
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--no-first-run',
+      '--no-zygote',
+      '--single-process',
+      '--disable-extensions'
+    ]
   });
 
   try {
     const page = await browser.newPage();
 
-    // Set realistic user agent to avoid detection
+    // Set realistic user agent
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     await page.setViewport({ width: 1920, height: 1080 });
 
@@ -112,7 +110,6 @@ async function scrapeCJDropshipping(searchTerm, options = {}) {
 
     console.log(`Scraping: ${url}`);
 
-    // Increased timeout to 60 seconds
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
 
     // Wait for products to load
