@@ -1,0 +1,16 @@
+#!/bin/bash
+echo "Creating GitHub repo via web interface..."
+echo ""
+echo "1. Go to: https://github.com/new"
+echo "2. Repository name: cj-scraper"
+echo "3. Description: AI-powered CJ Dropshipping scraper with smart filtering"
+echo "4. Public"
+echo "5. DO NOT initialize with README"
+echo "6. Create repository"
+echo ""
+read -p "Press Enter after creating repo..."
+echo ""
+echo "Pushing to GitHub..."
+git push -u origin main
+echo ""
+echo "Done! View at: https://github.com/RhysMckay7777/cj-scraper"

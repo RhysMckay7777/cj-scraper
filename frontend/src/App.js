@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import './App.css';
+import BatchSearch from './BatchSearch';
 
 // API URL - uses env var in production, proxy in development
 const API_URL = process.env.REACT_APP_API_URL || '';
 
 function App() {
+  const [activeTab, setActiveTab] = useState('single'); // 'single' or 'batch'
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState(null);
@@ -42,9 +44,28 @@ function App() {
       <header className="App-header">
         <h1>🔍 CJDropshipping Smart Scraper</h1>
         <p>AI-powered product filtering for accurate results</p>
+        
+        <div className="tabs">
+          <button 
+            className={`tab ${activeTab === 'single' ? 'active' : ''}`}
+            onClick={() => setActiveTab('single')}
+          >
+            🔍 Single Search
+          </button>
+          <button 
+            className={`tab ${activeTab === 'batch' ? 'active' : ''}`}
+            onClick={() => setActiveTab('batch')}
+          >
+            📦 Batch Search
+          </button>
+        </div>
       </header>
 
       <div className="container">
+        {activeTab === 'batch' ? (
+          <BatchSearch />
+        ) : (
+          <>
         <form onSubmit={handleScrape} className="search-form">
           <input
             type="text"
@@ -116,6 +137,8 @@ function App() {
               </div>
             )}
           </div>
+        )}
+        </>
         )}
       </div>
     </div>
