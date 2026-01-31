@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
-const puppeteer = require('puppeteer');
+const puppeteer = require('puppeteer-core');
+const chromium = require('@sparticuz/chromium');
 require('dotenv').config();
 
 const app = express();
@@ -74,18 +75,15 @@ function isRelevantProduct(productTitle, searchTerm) {
 
 // Scrape CJDropshipping
 async function scrapeCJDropshipping(searchTerm, options = {}) {
+  // Configure chromium for serverless environment
+  chromium.setHeadlessMode = true;
+  chromium.setGraphicsMode = false;
+
   const browser = await puppeteer.launch({
-    headless: 'new',
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--no-first-run',
-      '--no-zygote',
-      '--single-process',
-      '--disable-extensions'
-    ]
+    args: chromium.args,
+    defaultViewport: chromium.defaultViewport,
+    executablePath: await chromium.executablePath(),
+    headless: chromium.headless,
   });
 
   try {
