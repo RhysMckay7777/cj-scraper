@@ -37,7 +37,6 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
   const [results, setResults] = useState([]);
   const [error, setError] = useState(null);
   const [uploading, setUploading] = useState(false);
-  const [uploadResults, setUploadResults] = useState(null);
 
   const addSearch = () => {
     setSearches([...searches, { keyword: '', store: '', url: '', enabled: true }]);
@@ -187,7 +186,6 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
         markup: 250 // Default 250% markup
       });
 
-      setUploadResults(response.data);
       alert(`Successfully uploaded ${response.data.uploaded}/${allProducts.length} products to Shopify!`);
     } catch (err) {
       setError(err.response?.data?.error || err.message);
