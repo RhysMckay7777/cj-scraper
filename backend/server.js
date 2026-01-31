@@ -1,8 +1,12 @@
 const express = require('express');
 const cors = require('cors');
-const puppeteer = require('puppeteer-core');
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const chromium = require('@sparticuz/chromium');
 require('dotenv').config();
+
+// Enable stealth mode to bypass bot detection
+puppeteer.use(StealthPlugin());
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -88,6 +92,9 @@ async function scrapeCJDropshipping(searchTerm, options = {}) {
 
   try {
     const page = await browser.newPage();
+
+    // Set realistic user agent to avoid detection
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     await page.setViewport({ width: 1920, height: 1080 });
 
     // Build URL
@@ -105,10 +112,11 @@ async function scrapeCJDropshipping(searchTerm, options = {}) {
 
     console.log(`Scraping: ${url}`);
 
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+    // Increased timeout to 60 seconds
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
 
     // Wait for products to load
-    await page.waitForSelector('[data-product-type]', { timeout: 10000 }).catch(() => { });
+    await page.waitForSelector('[data-product-type]', { timeout: 15000 }).catch(() => { });
 
     // Extract product data
     const products = await page.evaluate(() => {
