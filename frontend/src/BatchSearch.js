@@ -2,16 +2,43 @@ import React, { useState } from 'react';
 import axios from 'axios';
 import './BatchSearch.css';
 
+// Helper: Parse CJ URL to extract keyword and filters
+function parseCJUrl(url) {
+  try {
+    const urlObj = new URL(url);
+    const pathname = urlObj.pathname;
+    
+    // Extract keyword from /search/KEYWORD.html
+    const match = pathname.match(/\/search\/(.+?)\.html/);
+    const keyword = match ? decodeURIComponent(match[1]) : '';
+    
+    // Extract filters from query params
+    const params = new URLSearchParams(urlObj.search);
+    const options = {};
+    
+    if (params.get('verifiedWarehouse') === '1') {
+      options.verifiedWarehouse = true;
+    }
+    if (params.get('startWarehouseInventory')) {
+      options.minInventory = parseInt(params.get('startWarehouseInventory'));
+    }
+    
+    return { keyword, options };
+  } catch (e) {
+    return { keyword: '', options: {} };
+  }
+}
+
 function BatchSearch() {
   const [searches, setSearches] = useState([
-    { keyword: '', store: '', enabled: true }
+    { keyword: '', store: '', url: '', enabled: true }
   ]);
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState([]);
   const [error, setError] = useState(null);
 
   const addSearch = () => {
-    setSearches([...searches, { keyword: '', store: '', enabled: true }]);
+    setSearches([...searches, { keyword: '', store: '', url: '', enabled: true }]);
   };
 
   const removeSearch = (index) => {
@@ -27,10 +54,10 @@ function BatchSearch() {
   const handleBatchScrape = async (e) => {
     e.preventDefault();
     
-    const activeSearches = searches.filter(s => s.enabled && s.keyword.trim());
+    const activeSearches = searches.filter(s => s.enabled && (s.keyword.trim() || s.url.trim()));
     
     if (activeSearches.length === 0) {
-      setError('Please enter at least one search keyword');
+      setError('Please enter at least one search keyword or CJ URL');
       return;
     }
 
@@ -46,23 +73,33 @@ function BatchSearch() {
         const search = activeSearches[i];
         
         try {
+          // Parse URL if provided, otherwise use keyword
+          let searchTerm = search.keyword.trim();
+          let options = { store: search.store || undefined };
+          
+          if (search.url.trim()) {
+            const parsed = parseCJUrl(search.url.trim());
+            searchTerm = parsed.keyword || searchTerm;
+            options = { ...options, ...parsed.options };
+          }
+          
           const response = await axios.post('/api/scrape', {
-            searchTerm: search.keyword.trim(),
-            options: {
-              store: search.store || undefined
-            }
+            searchTerm,
+            options
           });
 
           batchResults.push({
-            keyword: search.keyword,
+            keyword: searchTerm,
             store: search.store,
+            url: search.url,
             success: true,
             data: response.data
           });
         } catch (err) {
           batchResults.push({
-            keyword: search.keyword,
+            keyword: search.keyword || 'URL provided',
             store: search.store,
+            url: search.url,
             success: false,
             error: err.response?.data?.error || err.message
           });
@@ -117,13 +154,14 @@ function BatchSearch() {
     <div className="batch-search">
       <div className="batch-header">
         <h2>📦 Batch Search</h2>
-        <p>Search multiple keywords at once - perfect for different products or stores</p>
+        <p>Search multiple keywords at once - paste CJ URLs with filters or enter keywords manually</p>
       </div>
 
       <form onSubmit={handleBatchScrape} className="batch-form">
         <div className="searches-container">
           <div className="searches-header">
             <span className="col-keyword">Keyword/Product</span>
+            <span className="col-url">CJ URL (optional)</span>
             <span className="col-store">Store/Brand (optional)</span>
             <span className="col-actions">Actions</span>
           </div>
@@ -142,6 +180,14 @@ function BatchSearch() {
                 onChange={(e) => updateSearch(index, 'keyword', e.target.value)}
                 placeholder="e.g., sherpa blanket"
                 className="search-keyword"
+                disabled={loading || !search.enabled}
+              />
+              <input
+                type="text"
+                value={search.url}
+                onChange={(e) => updateSearch(index, 'url', e.target.value)}
+                placeholder="https://www.cjdropshipping.com/search/..."
+                className="search-url"
                 disabled={loading || !search.enabled}
               />
               <input

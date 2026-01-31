@@ -34,7 +34,7 @@
 
 .searches-header {
   display: grid;
-  grid-template-columns: 30px 1fr 1fr 60px;
+  grid-template-columns: 30px 1fr 1.5fr 0.8fr 60px;
   gap: 10px;
   padding: 10px;
   background: #f8f9fa;
@@ -47,7 +47,7 @@
 
 .search-row {
   display: grid;
-  grid-template-columns: 30px 1fr 1fr 60px;
+  grid-template-columns: 30px 1fr 1.5fr 0.8fr 60px;
   gap: 10px;
   margin-bottom: 10px;
   align-items: center;
@@ -60,6 +60,7 @@
 }
 
 .search-keyword,
+.search-url,
 .search-store {
   padding: 12px;
   border: 2px solid #e1e8ed;
@@ -68,7 +69,13 @@
   transition: all 0.2s;
 }
 
+.search-url {
+  font-size: 13px;
+  color: #3498db;
+}
+
 .search-keyword:focus,
+.search-url:focus,
 .search-store:focus {
   outline: none;
   border-color: #3498db;
@@ -76,6 +83,7 @@
 }
 
 .search-keyword:disabled,
+.search-url:disabled,
 .search-store:disabled {
   background: #f8f9fa;
   cursor: not-allowed;
