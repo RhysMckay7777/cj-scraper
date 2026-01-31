@@ -1,0 +1,17 @@
+{
+  "name": "cj-scraper",
+  "version": "1.0.0",
+  "description": "CJ Dropshipping Smart Scraper",
+  "main": "api/scrape.js",
+  "dependencies": {
+    "puppeteer-core": "^21.6.1",
+    "@sparticuz/chromium": "^119.0.2"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"No tests specified\""
+  },
+  "keywords": ["scraper", "cj", "dropshipping"],
+  "author": "Rhys McKay",
+  "license": "MIT"
+}

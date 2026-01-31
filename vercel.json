@@ -1,0 +1,24 @@
+{
+  "version": 2,
+  "buildCommand": "cd frontend && npm install && npm run build",
+  "outputDirectory": "frontend/build",
+  "routes": [
+    {
+      "src": "/api/scrape",
+      "dest": "/api/scrape.js"
+    },
+    {
+      "handle": "filesystem"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
+    }
+  ],
+  "functions": {
+    "api/scrape.js": {
+      "memory": 1024,
+      "maxDuration": 30
+    }
+  }
+}
