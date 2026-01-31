@@ -12,6 +12,18 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState(null);
   const [error, setError] = useState(null);
+  
+  // Shopify settings
+  const [shopifyStore, setShopifyStore] = useState(localStorage.getItem('shopifyStore') || '');
+  const [shopifyToken, setShopifyToken] = useState(localStorage.getItem('shopifyToken') || '');
+  const [showSettings, setShowSettings] = useState(false);
+
+  const saveShopifySettings = () => {
+    localStorage.setItem('shopifyStore', shopifyStore);
+    localStorage.setItem('shopifyToken', shopifyToken);
+    setShowSettings(false);
+    alert('Shopify store settings saved! You can now upload products directly to Shopify.');
+  };
 
   const handleScrape = async (e) => {
     e.preventDefault();
@@ -59,11 +71,60 @@ function App() {
             📦 Batch Search
           </button>
         </div>
+        
+        <button className="settings-btn" onClick={() => setShowSettings(!showSettings)}>
+          ⚙️ {shopifyStore ? `Store: ${shopifyStore.split('.')[0]}` : 'Configure Shopify'}
+        </button>
       </header>
+
+      {/* Settings Modal */}
+      {showSettings && (
+        <div className="settings-modal" onClick={() => setShowSettings(false)}>
+          <div className="settings-content" onClick={(e) => e.stopPropagation()}>
+            <h2>⚙️ Shopify Store Settings</h2>
+            <p>Configure which Shopify store to upload products to</p>
+            
+            <div className="settings-form">
+              <div className="form-group">
+                <label>Shopify Store URL</label>
+                <input
+                  type="text"
+                  value={shopifyStore}
+                  onChange={(e) => setShopifyStore(e.target.value)}
+                  placeholder="your-store.myshopify.com"
+                  className="settings-input"
+                />
+                <small>Format: your-store.myshopify.com (no https://)</small>
+              </div>
+
+              <div className="form-group">
+                <label>Shopify Admin API Token</label>
+                <input
+                  type="password"
+                  value={shopifyToken}
+                  onChange={(e) => setShopifyToken(e.target.value)}
+                  placeholder="shpat_xxxxxxxxxxxxx"
+                  className="settings-input"
+                />
+                <small>Get from: Shopify Admin → Apps → Develop apps</small>
+              </div>
+
+              <div className="settings-actions">
+                <button onClick={() => setShowSettings(false)} className="btn-cancel">
+                  Cancel
+                </button>
+                <button onClick={saveShopifySettings} className="btn-save">
+                  Save Settings
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="container">
         {activeTab === 'batch' ? (
-          <BatchSearch />
+          <BatchSearch shopifyStore={shopifyStore} shopifyToken={shopifyToken} />
         ) : (
           <>
         <form onSubmit={handleScrape} className="search-form">

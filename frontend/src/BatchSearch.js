@@ -29,13 +29,15 @@ function parseCJUrl(url) {
   }
 }
 
-function BatchSearch() {
+function BatchSearch({ shopifyStore, shopifyToken }) {
   const [searches, setSearches] = useState([
     { keyword: '', store: '', url: '', enabled: true }
   ]);
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState([]);
   const [error, setError] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadResults, setUploadResults] = useState(null);
 
   const addSearch = () => {
     setSearches([...searches, { keyword: '', store: '', url: '', enabled: true }]);
@@ -150,6 +152,51 @@ function BatchSearch() {
     a.click();
   };
 
+  const uploadToShopify = async () => {
+    if (!shopifyStore || !shopifyToken) {
+      alert('Please configure your Shopify store first (click Settings button in header)');
+      return;
+    }
+
+    const successfulResults = results.filter(r => r.success && r.data.products);
+    
+    if (successfulResults.length === 0) {
+      alert('No products to upload. Run a batch search first.');
+      return;
+    }
+
+    // Collect all products
+    const allProducts = [];
+    successfulResults.forEach(result => {
+      result.data.products.forEach(product => {
+        allProducts.push({
+          ...product,
+          sourceKeyword: result.keyword
+        });
+      });
+    });
+
+    setUploading(true);
+    setError(null);
+
+    try {
+      const response = await axios.post('/api/upload-shopify', {
+        products: allProducts,
+        shopifyStore,
+        shopifyToken,
+        markup: 250 // Default 250% markup
+      });
+
+      setUploadResults(response.data);
+      alert(`Successfully uploaded ${response.data.uploaded}/${allProducts.length} products to Shopify!`);
+    } catch (err) {
+      setError(err.response?.data?.error || err.message);
+      alert('Upload failed: ' + (err.response?.data?.error || err.message));
+    } finally {
+      setUploading(false);
+    }
+  };
+
   return (
     <div className="batch-search">
       <div className="batch-header">
@@ -231,9 +278,18 @@ function BatchSearch() {
           <div className="results-header">
             <h3>📊 Results ({results.filter(r => r.success).length}/{results.length} successful)</h3>
             {results.some(r => r.success) && (
-              <button onClick={exportResults} className="export-btn">
-                📥 Export CSV
-              </button>
+              <div className="results-actions">
+                <button onClick={exportResults} className="export-btn">
+                  📥 Export CSV
+                </button>
+                <button 
+                  onClick={uploadToShopify} 
+                  className="shopify-btn"
+                  disabled={uploading}
+                >
+                  {uploading ? '⏳ Uploading...' : '🏪 Upload to Shopify'}
+                </button>
+              </div>
             )}
           </div>
 

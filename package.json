@@ -5,7 +5,8 @@
   "main": "api/scrape.js",
   "dependencies": {
     "puppeteer-core": "^21.6.1",
-    "@sparticuz/chromium": "^119.0.2"
+    "@sparticuz/chromium": "^119.0.2",
+    "axios": "^1.6.0"
   },
   "devDependencies": {},
   "scripts": {

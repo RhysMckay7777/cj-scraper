@@ -318,3 +318,30 @@
   margin-top: 20px;
   font-weight: 500;
 }
+
+.results-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.shopify-btn {
+  padding: 10px 20px;
+  background: #5c6ac4;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.shopify-btn:hover:not(:disabled) {
+  background: #4c5ab8;
+  transform: translateY(-2px);
+}
+
+.shopify-btn:disabled {
+  background: #95a5a6;
+  cursor: not-allowed;
+  transform: none;
+}
