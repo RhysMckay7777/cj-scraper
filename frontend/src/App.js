@@ -2,6 +2,9 @@ import React, { useState } from 'react';
 import axios from 'axios';
 import './App.css';
 
+// API URL - uses env var in production, proxy in development
+const API_URL = process.env.REACT_APP_API_URL || '';
+
 function App() {
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(false);
@@ -10,7 +13,7 @@ function App() {
 
   const handleScrape = async (e) => {
     e.preventDefault();
-    
+
     if (!searchTerm.trim()) {
       setError('Please enter a search term');
       return;
@@ -21,7 +24,7 @@ function App() {
     setResults(null);
 
     try {
-      const response = await axios.post('/api/scrape', {
+      const response = await axios.post(`${API_URL}/api/scrape`, {
         searchTerm: searchTerm.trim(),
         options: {}
       });
