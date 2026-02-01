@@ -53,9 +53,23 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
       for (let i = 0; i < activeSearches.length; i++) {
         const search = activeSearches[i];
         
-        // Prefer URL over keyword
+        // Send URL (new backend) + searchTerm extracted (old backend compatibility)
+        // Extract search term from URL for backward compatibility
+        let searchTerm = '';
+        if (search.url.trim()) {
+          try {
+            const urlMatch = search.url.match(/\/search\/(.+?)\.html/);
+            searchTerm = urlMatch ? decodeURIComponent(urlMatch[1]).replace(/\+/g, ' ') : '';
+          } catch (e) {
+            searchTerm = '';
+          }
+        }
+        
         const requestBody = search.url.trim() 
-          ? { searchUrl: search.url.trim() }
+          ? { 
+              searchUrl: search.url.trim(),
+              searchTerm: searchTerm || 'fleece throw blanket' // Fallback
+            }
           : { searchTerm: search.keyword.trim() };
 
         // Debug logging
