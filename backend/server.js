@@ -568,6 +568,27 @@ app.post('/api/upload-shopify', async (req, res) => {
             id
             title
             handle
+            variants(first: 1) {
+              nodes {
+                id
+              }
+            }
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `;
+
+    // Mutation to update variant price after product creation
+    const variantUpdateMutation = `
+      mutation productVariantUpdate($input: ProductVariantInput!) {
+        productVariantUpdate(input: $input) {
+          productVariant {
+            id
+            price
           }
           userErrors {
             field
@@ -601,18 +622,8 @@ app.post('/api/upload-shopify', async (req, res) => {
               product.freeShipping ? 'Free Shipping' : '',
               'CJ Dropshipping'
             ].filter(Boolean),
-            variants: [
-              {
-                price: sellPrice,
-                compareAtPrice: compareAtPrice,
-                sku: product.sku || '',
-                inventoryManagement: 'SHOPIFY',
-                inventoryPolicy: 'DENY',
-                requiresShipping: true,
-                weight: product.weight || 0,
-                weightUnit: 'GRAMS',
-              }
-            ],
+            // Note: productCreate auto-creates a default variant
+            // Variants must be updated separately with productVariantUpdate
           },
           media: product.image ? [
             {
@@ -639,10 +650,47 @@ app.post('/api/upload-shopify', async (req, res) => {
         );
 
         const result = shopifyResponse.data?.data?.productCreate;
+        const gqlErrors = shopifyResponse.data?.errors;
 
-        if (result?.product?.id) {
+        if (gqlErrors) {
+          failed++;
+          const errorMsg = gqlErrors.map(e => e.message).join(', ');
+          console.error(`[Shopify] GraphQL Error "${product.title}":`, errorMsg);
+          errors.push({ title: product.title, error: errorMsg });
+        } else if (result?.product?.id) {
+          // Step 2: Update the default variant with price
+          const variantId = result.product.variants?.nodes?.[0]?.id;
+
+          if (variantId) {
+            try {
+              await axios.post(
+                `https://${shopifyStore}/admin/api/2024-01/graphql.json`,
+                {
+                  query: variantUpdateMutation,
+                  variables: {
+                    input: {
+                      id: variantId,
+                      price: sellPrice,
+                      compareAtPrice: compareAtPrice,
+                      sku: product.sku || `CJ-${product.pid || Date.now()}`,
+                    }
+                  }
+                },
+                {
+                  headers: {
+                    'X-Shopify-Access-Token': shopifyToken,
+                    'Content-Type': 'application/json',
+                  },
+                  timeout: 15000
+                }
+              );
+            } catch (variantErr) {
+              console.log(`[Shopify] Variant update failed (product still created): ${variantErr.message}`);
+            }
+          }
+
           uploaded++;
-          console.log(`[Shopify] Created: ${product.title} (${result.product.id})`);
+          console.log(`[Shopify] Created: ${product.title} @ $${sellPrice} (${result.product.id})`);
         } else if (result?.userErrors?.length > 0) {
           failed++;
           const errorMsg = result.userErrors.map(e => e.message).join(', ');
