@@ -2,7 +2,7 @@ const express = require('express');
 const path = require('path');
 const axios = require('axios');
 const fs = require('fs');
-const { searchCJProducts } = require('./cj-api-scraper');
+const { searchCJProducts, getCJCategories } = require('./cj-api-scraper');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -61,42 +61,24 @@ app.use((req, res, next) => {
   next();
 });
 
-// STRICT AI-powered product relevance checker
+// RELAXED product relevance checker - now lets CJ API + categoryId do the heavy lifting
 function isRelevantProduct(productTitle, searchTerm) {
   const lowerTitle = productTitle.toLowerCase();
   const lowerSearch = searchTerm.toLowerCase();
 
+  // Extract main keywords (words > 2 chars)
   const searchWords = lowerSearch.split(' ').filter(w => w.length > 2);
-  const allWordsPresent = searchWords.every(word => lowerTitle.includes(word));
-  if (!allWordsPresent) return false;
-
-  const invalidCategories = [
-    'hoodie', 'sweatshirt', 'jacket', 'coat', 'sweater', 'shirt', 'pants', 'joggers',
-    'pullover', 'cardigan', 'vest', 'shorts', 'leggings', 'dress', 'skirt',
-    'shoes', 'sneakers', 'boots', 'slippers', 'sandals', 'loafers',
-    'dog', 'cat', 'pet', 'puppy', 'kitten',
-    'baby', 'infant', 'toddler', 'kids', 'children',
-    'pillow', 'cushion', 'mat', 'rug', 'carpet', 'curtain', 'towel',
-    'sheet', 'duvet', 'comforter', 'quilt cover',
-    'scarf', 'shawl', 'gloves', 'mittens', 'hat', 'beanie'
-  ];
-
-  for (const invalid of invalidCategories) {
-    if (lowerTitle.includes(invalid)) {
-      const hasBlanketsAfter = lowerTitle.includes(invalid + ' blanket') ||
-        lowerTitle.includes(invalid + ' throw');
-      if (!hasBlanketsAfter) return false;
-    }
+  
+  // RELAXED: At least HALF of the search words should be present (not ALL)
+  const matchingWords = searchWords.filter(word => lowerTitle.includes(word));
+  const matchRatio = matchingWords.length / searchWords.length;
+  
+  if (matchRatio < 0.5) {
+    console.log(`  ❌ Text filter: Only ${matchRatio * 100}% match for "${productTitle}"`);
+    return false;
   }
 
-  if (lowerSearch.includes('throw') && lowerSearch.includes('blanket')) {
-    if (!lowerTitle.includes('throw') || !lowerTitle.includes('blanket')) return false;
-  }
-
-  if (lowerSearch.includes('sherpa')) {
-    if (!lowerTitle.includes('sherpa')) return false;
-  }
-
+  console.log(`  ✅ Text filter: ${matchRatio * 100}% match for "${productTitle}"`);
   return true;
 }
 
@@ -317,10 +299,13 @@ app.post('/api/scrape', async (req, res) => {
       filters = parsed.filters;
     }
 
+    // FIXED: Fetch ALL pages, not just page 1
     const apiResult = await searchCJProducts(keyword, CJ_API_TOKEN, {
       pageNum: 1,
-      pageSize: 100,
-      verifiedWarehouse: filters.verifiedWarehouse
+      pageSize: 200, // Max allowed by CJ API
+      verifiedWarehouse: filters.verifiedWarehouse,
+      categoryId: filters.categoryId || null, // Support category filtering
+      fetchAllPages: true // NEW: Fetch all pages automatically
     });
 
     if (!apiResult.success) {
@@ -364,12 +349,39 @@ app.post('/api/scrape', async (req, res) => {
   }
 });
 
+// Get CJ categories endpoint
+app.get('/api/categories', async (req, res) => {
+  if (!CJ_API_TOKEN) {
+    return res.status(500).json({ error: 'CJ_API_TOKEN environment variable is required' });
+  }
+
+  try {
+    const result = await getCJCategories(CJ_API_TOKEN);
+    
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to fetch categories');
+    }
+
+    // Filter to only level 3 categories (the ones with IDs)
+    const level3Categories = result.categories.filter(cat => cat.level === 3);
+
+    res.json({
+      success: true,
+      categories: level3Categories,
+      total: level3Categories.length
+    });
+  } catch (error) {
+    console.error('Error fetching categories:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
-    endpoints: ['/api/scrape', '/api/upload-shopify', '/health']
+    endpoints: ['/api/scrape', '/api/categories', '/api/upload-shopify', '/health']
   });
 });
 
