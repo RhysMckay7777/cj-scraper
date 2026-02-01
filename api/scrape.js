@@ -1,5 +1,5 @@
 // Vercel Serverless Function for CJ Scraping
-// Fixed: Pagination + Strict relevance filter (v1.2)
+// Fixed: URL parsing + Strict relevance filter (v1.3)
 const puppeteer = require('puppeteer-core');
 const chrome = require('@sparticuz/chromium');
 
@@ -66,8 +66,36 @@ function isRelevantProduct(productTitle, searchTerm) {
   return true; // Passed all checks
 }
 
-// Scrape CJDropshipping with proper pagination
-async function scrapeCJDropshipping(searchTerm, options = {}) {
+// Parse CJ URL to extract search term and all filters
+function parseCJUrl(url) {
+  try {
+    const urlObj = new URL(url);
+    const pathname = urlObj.pathname;
+    
+    // Extract keyword from /search/KEYWORD.html
+    const match = pathname.match(/\/search\/(.+?)\.html/);
+    const keyword = match ? decodeURIComponent(match[1]).replace(/\+/g, ' ') : '';
+    
+    // Extract ALL query parameters as filters
+    const params = new URLSearchParams(urlObj.search);
+    const filters = {};
+    
+    // Capture all parameters
+    for (const [key, value] of params.entries()) {
+      filters[key] = value;
+    }
+    
+    console.log('Parsed CJ URL:', { keyword, filters });
+    
+    return { keyword, filters };
+  } catch (e) {
+    console.error('URL parse error:', e);
+    return { keyword: '', filters: {} };
+  }
+}
+
+// Scrape CJDropshipping with proper pagination and URL parsing
+async function scrapeCJDropshipping(searchUrl, searchTerm = null) {
   let browser = null;
   const allProducts = [];
   
@@ -81,9 +109,27 @@ async function scrapeCJDropshipping(searchTerm, options = {}) {
     
     const page = await browser.newPage();
     
-    // Build base URL
-    const baseUrl = 'https://www.cjdropshipping.com/search/';
-    const encodedTerm = encodeURIComponent(searchTerm);
+    // Parse URL if provided, otherwise build from search term
+    let baseUrl, keyword, filters;
+    
+    if (searchUrl && searchUrl.includes('cjdropshipping.com')) {
+      // User provided a CJ URL - extract everything from it
+      const parsed = parseCJUrl(searchUrl);
+      keyword = parsed.keyword;
+      filters = parsed.filters;
+      
+      // Remove pageNum from filters (we'll add it per page)
+      delete filters.pageNum;
+      
+      baseUrl = `https://www.cjdropshipping.com/search/${encodeURIComponent(keyword)}.html`;
+    } else {
+      // Fallback: build URL from search term
+      keyword = searchTerm || searchUrl;
+      filters = {};
+      baseUrl = `https://www.cjdropshipping.com/search/${encodeURIComponent(keyword)}.html`;
+    }
+    
+    console.log('Scraping config:', { keyword, filters, baseUrl });
     
     let currentPage = 1;
     let hasMorePages = true;
@@ -91,15 +137,13 @@ async function scrapeCJDropshipping(searchTerm, options = {}) {
     
     // Paginate through all results
     while (hasMorePages) {
-      let url = `${baseUrl}${encodedTerm}.html?pageNum=${currentPage}`;
+      // Build URL with page number + all filters
+      const queryParams = new URLSearchParams({
+        pageNum: currentPage.toString(),
+        ...filters
+      });
       
-      // Add filters if specified
-      if (options.verifiedWarehouse) {
-        url += '&verifiedWarehouse=1';
-      }
-      if (options.minInventory) {
-        url += `&startWarehouseInventory=${options.minInventory}`;
-      }
+      const url = `${baseUrl}?${queryParams.toString()}`;
       
       console.log(`Scraping page ${currentPage}: ${url}`);
       
@@ -150,12 +194,17 @@ async function scrapeCJDropshipping(searchTerm, options = {}) {
             const href = link?.getAttribute('href') || '';
             const lists = el.textContent.match(/Lists?:\s*(\d+)/i)?.[1] || '0';
             
+            // Extract image URL
+            const img = el.querySelector('img');
+            const imageUrl = img?.getAttribute('src') || img?.getAttribute('data-src') || '';
+            
             if (title && href) {
               items.push({
                 title,
                 price,
                 lists: parseInt(lists),
-                url: href.startsWith('http') ? href : `https://www.cjdropshipping.com${href}`
+                url: href.startsWith('http') ? href : `https://www.cjdropshipping.com${href}`,
+                image: imageUrl
               });
             }
           } catch (err) {
@@ -193,19 +242,19 @@ async function scrapeCJDropshipping(searchTerm, options = {}) {
       
       // Small delay between pages
       if (hasMorePages) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, 1500));
       }
     }
     
     console.log(`Total products scraped: ${allProducts.length} across ${currentPage - 1} pages`);
     
     // Filter relevant products with STRICT checking
-    const filtered = allProducts.filter(p => isRelevantProduct(p.title, searchTerm));
+    const filtered = allProducts.filter(p => isRelevantProduct(p.title, keyword));
     
     console.log(`${filtered.length} products passed STRICT filter (${((filtered.length/allProducts.length)*100).toFixed(1)}%)`);
     
     // Show rejected examples for debugging
-    const rejected = allProducts.filter(p => !isRelevantProduct(p.title, searchTerm));
+    const rejected = allProducts.filter(p => !isRelevantProduct(p.title, keyword));
     if (rejected.length > 0) {
       console.log('Sample rejected products:');
       rejected.slice(0, 5).forEach(p => console.log(`  ❌ ${p.title}`));
@@ -213,7 +262,8 @@ async function scrapeCJDropshipping(searchTerm, options = {}) {
     
     return {
       success: true,
-      searchTerm,
+      searchTerm: keyword,
+      filters: filters,
       totalFound: allProducts.length,
       filtered: filtered.length,
       passRate: ((filtered.length/allProducts.length)*100).toFixed(1) + '%',
@@ -242,7 +292,6 @@ module.exports = async (req, res) => {
   console.log(`[${requestId}] INCOMING REQUEST AT ${new Date().toISOString()}`);
   console.log(`[${requestId}] Method: ${req.method}`);
   console.log(`[${requestId}] URL: ${req.url}`);
-  console.log(`[${requestId}] Headers:`, JSON.stringify(req.headers, null, 2));
   console.log(`[${requestId}] Body:`, JSON.stringify(req.body, null, 2));
   console.log('='.repeat(60));
   
@@ -271,25 +320,25 @@ module.exports = async (req, res) => {
     });
   }
   
-  const { searchTerm, options } = req.body || {};
+  const { searchUrl, searchTerm } = req.body || {};
   
+  console.log(`[${requestId}] Parsed searchUrl: "${searchUrl}"`);
   console.log(`[${requestId}] Parsed searchTerm: "${searchTerm}"`);
-  console.log(`[${requestId}] Parsed options:`, JSON.stringify(options, null, 2));
   
-  if (!searchTerm) {
-    console.error(`[${requestId}] ERROR: searchTerm is missing from request body`);
+  if (!searchUrl && !searchTerm) {
+    console.error(`[${requestId}] ERROR: Neither searchUrl nor searchTerm provided`);
     return res.status(400).json({ 
-      error: 'searchTerm is required',
+      error: 'searchUrl or searchTerm is required',
       receivedBody: req.body,
       requestId
     });
   }
   
   try {
-    console.log(`[${requestId}] Starting scrape for: "${searchTerm}"`);
+    console.log(`[${requestId}] Starting scrape`);
     const startTime = Date.now();
     
-    const results = await scrapeCJDropshipping(searchTerm, options || {});
+    const results = await scrapeCJDropshipping(searchUrl || searchTerm, searchTerm);
     
     const duration = Date.now() - startTime;
     console.log(`[${requestId}] Scrape completed in ${duration}ms`);

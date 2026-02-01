@@ -20,6 +20,27 @@
   font-size: 16px;
 }
 
+.batch-instructions {
+  background: #e3f2fd;
+  border-left: 4px solid #2196f3;
+  padding: 20px;
+  border-radius: 8px;
+  text-align: left;
+  max-width: 800px;
+  margin: 20px auto;
+  line-height: 1.8;
+}
+
+.batch-instructions strong {
+  color: #1976d2;
+  font-size: 18px;
+}
+
+.batch-instructions em {
+  color: #5c6bc0;
+  font-weight: 500;
+}
+
 .batch-form {
   background: white;
   border-radius: 12px;
@@ -34,7 +55,7 @@
 
 .searches-header {
   display: grid;
-  grid-template-columns: 30px 1fr 1.5fr 0.8fr 60px;
+  grid-template-columns: 30px 1fr 60px;
   gap: 10px;
   padding: 10px;
   background: #f8f9fa;
@@ -47,7 +68,7 @@
 
 .search-row {
   display: grid;
-  grid-template-columns: 30px 1fr 1.5fr 0.8fr 60px;
+  grid-template-columns: 30px 1fr 60px;
   gap: 10px;
   margin-bottom: 10px;
   align-items: center;
@@ -70,8 +91,9 @@
 }
 
 .search-url {
-  font-size: 13px;
-  color: #3498db;
+  font-size: 14px;
+  color: #2c3e50;
+  font-weight: 500;
 }
 
 .search-keyword:focus,

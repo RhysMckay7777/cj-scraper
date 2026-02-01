@@ -35,10 +35,10 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
   const handleBatchScrape = async (e) => {
     e.preventDefault();
 
-    const activeSearches = searches.filter(s => s.enabled && s.keyword.trim());
+    const activeSearches = searches.filter(s => s.enabled && (s.url.trim() || s.keyword.trim()));
 
     if (activeSearches.length === 0) {
-      setError('Please enter at least one search keyword or CJ URL');
+      setError('Please enter at least one CJ URL');
       return;
     }
 
@@ -52,10 +52,11 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
 
       for (let i = 0; i < activeSearches.length; i++) {
         const search = activeSearches[i];
-        const requestBody = {
-          searchTerm: search.keyword.trim(),
-          options: {}
-        };
+        
+        // Prefer URL over keyword
+        const requestBody = search.url.trim() 
+          ? { searchUrl: search.url.trim() }
+          : { searchTerm: search.keyword.trim() };
 
         // Debug logging
         const requestUrl = `${API_URL}/api/scrape`;
@@ -199,14 +200,20 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
     <div className="batch-search">
       <div className="batch-header">
         <h2>📦 Batch Search</h2>
-        <p>Search multiple keywords at once - paste CJ URLs with filters or enter keywords manually</p>
+        <p className="batch-instructions">
+          <strong>📋 How to use:</strong><br/>
+          1. Go to CJDropshipping and search for your product<br/>
+          2. Apply any filters you want (Verified Warehouse, Min Inventory, etc.)<br/>
+          3. Copy the full URL from your browser<br/>
+          4. Paste it below → Click "Start Batch Scrape"<br/>
+          <em>The scraper will find all products from YOUR filtered search only.</em>
+        </p>
       </div>
 
       <form onSubmit={handleBatchScrape} className="batch-form">
         <div className="searches-container">
           <div className="searches-header">
-            <span className="col-keyword">Keyword/Product</span>
-            <span className="col-url">CJ URL (optional)</span>
+            <span className="col-url">🔗 CJ Search URL (required)</span>
             <span className="col-actions">Actions</span>
           </div>
 
@@ -217,20 +224,13 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
                 checked={search.enabled}
                 onChange={(e) => updateSearch(index, 'enabled', e.target.checked)}
                 className="search-checkbox"
-              />
-              <input
-                type="text"
-                value={search.keyword}
-                onChange={(e) => updateSearch(index, 'keyword', e.target.value)}
-                placeholder="e.g., sherpa blanket"
-                className="search-keyword"
-                disabled={loading || !search.enabled}
+                title="Enable/disable this search"
               />
               <input
                 type="text"
                 value={search.url}
                 onChange={(e) => updateSearch(index, 'url', e.target.value)}
-                placeholder="https://www.cjdropshipping.com/search/..."
+                placeholder="Paste your CJ search URL here (e.g., https://www.cjdropshipping.com/search/fleece+throw+blanket.html?pageNum=1&verifiedWarehouse=1)"
                 className="search-url"
                 disabled={loading || !search.enabled}
               />
@@ -239,6 +239,7 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
                 onClick={() => removeSearch(index)}
                 disabled={loading || searches.length === 1}
                 className="remove-btn"
+                title="Remove this search"
               >
                 ❌
               </button>
