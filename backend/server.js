@@ -1,9 +1,16 @@
 const express = require('express');
 const path = require('path');
 const puppeteer = require('puppeteer');
+const vision = require('@google-cloud/vision');
+const axios = require('axios');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
+
+// Initialize Google Vision API client
+const visionClient = new vision.ImageAnnotatorClient({
+  keyFilename: process.env.GOOGLE_APPLICATION_CREDENTIALS || './google-vision-key.json'
+});
 
 // Middleware
 app.use(express.json());
@@ -76,8 +83,84 @@ function parseCJUrl(url) {
   }
 }
 
+// Analyze image with Google Vision API
+async function analyzeProductImage(imageUrl, searchTerm) {
+  try {
+    // Download image first (Vision API needs the image data or public URL)
+    const response = await axios.get(imageUrl, { 
+      responseType: 'arraybuffer',
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+    
+    const imageBuffer = Buffer.from(response.data);
+    
+    // Call Vision API for label detection
+    const [result] = await visionClient.labelDetection({
+      image: { content: imageBuffer }
+    });
+    
+    const labels = result.labelAnnotations || [];
+    const detectedLabels = labels.map(l => l.description.toLowerCase());
+    
+    console.log(`Vision API labels for ${imageUrl.substring(0, 50)}:`, detectedLabels.slice(0, 5));
+    
+    // Build expected labels from search term
+    const searchWords = searchTerm.toLowerCase().split(' ').filter(w => w.length > 2);
+    
+    // Define valid categories for blankets/textiles
+    const validCategories = [
+      'blanket', 'throw', 'textile', 'bedding', 'fabric', 'fleece', 
+      'sherpa', 'plush', 'soft', 'bed', 'home', 'linen', 'cotton',
+      'polyester', 'material', 'furnishing', 'comfort'
+    ];
+    
+    // Invalid categories (things that are definitely NOT blankets)
+    const invalidCategories = [
+      'clothing', 'apparel', 'fashion', 'footwear', 'shoe', 'boot',
+      'sneaker', 'watch', 'jewelry', 'accessory', 'toy', 'electronics',
+      'gadget', 'tool', 'furniture', 'kitchen', 'appliance'
+    ];
+    
+    // Check for invalid categories first
+    const hasInvalidCategory = detectedLabels.some(label => 
+      invalidCategories.some(invalid => label.includes(invalid))
+    );
+    
+    if (hasInvalidCategory) {
+      console.log(`  ❌ Image rejected: contains invalid category`);
+      return false;
+    }
+    
+    // Check if image contains valid textile/blanket-related labels
+    const hasValidCategory = detectedLabels.some(label =>
+      validCategories.some(valid => label.includes(valid))
+    );
+    
+    // Also check if any search term words appear in labels
+    const hasSearchTermMatch = searchWords.some(word =>
+      detectedLabels.some(label => label.includes(word))
+    );
+    
+    if (hasValidCategory || hasSearchTermMatch) {
+      console.log(`  ✅ Image passed: valid category or search term match`);
+      return true;
+    }
+    
+    console.log(`  ❌ Image rejected: no valid category match`);
+    return false;
+    
+  } catch (error) {
+    console.error('Vision API error:', error.message);
+    // On error, default to PASS (don't reject due to API issues)
+    return true;
+  }
+}
+
 // Scrape CJ with Puppeteer
-async function scrapeCJDropshipping(searchUrl, searchTerm = null) {
+async function scrapeCJDropshipping(searchUrl, searchTerm = null, useImageDetection = true) {
   let browser = null;
   const allProducts = [];
   
@@ -192,12 +275,52 @@ async function scrapeCJDropshipping(searchUrl, searchTerm = null) {
     
     console.log(`Total: ${allProducts.length} products across ${currentPage - 1} pages`);
     
-    const filtered = allProducts.filter(p => isRelevantProduct(p.title, keyword));
-    console.log(`Filtered: ${filtered.length} (${((filtered.length/allProducts.length)*100).toFixed(1)}%)`);
+    // STEP 1: Text filter (fast)
+    console.log('\n=== STEP 1: Text Filtering ===');
+    const textFiltered = allProducts.filter(p => isRelevantProduct(p.title, keyword));
+    console.log(`Text filter: ${textFiltered.length}/${allProducts.length} passed (${((textFiltered.length/allProducts.length)*100).toFixed(1)}%)`);
     
-    const rejected = allProducts.filter(p => !isRelevantProduct(p.title, keyword));
-    if (rejected.length > 0) {
-      console.log('Rejected samples:');
+    // STEP 2: Image detection (slow, only on text-passed products)
+    let finalFiltered = textFiltered;
+    
+    if (useImageDetection && textFiltered.length > 0) {
+      console.log('\n=== STEP 2: Image Detection (Google Vision API) ===');
+      console.log(`Analyzing ${textFiltered.length} product images...`);
+      
+      const imageResults = [];
+      
+      for (let i = 0; i < textFiltered.length; i++) {
+        const product = textFiltered[i];
+        console.log(`[${i + 1}/${textFiltered.length}] Analyzing: ${product.title.substring(0, 50)}...`);
+        
+        if (!product.image || !product.image.startsWith('http')) {
+          console.log('  ⚠️  No valid image URL - skipping Vision API');
+          imageResults.push(product); // Keep products without images (default pass)
+          continue;
+        }
+        
+        const imageMatches = await analyzeProductImage(product.image, keyword);
+        
+        if (imageMatches) {
+          imageResults.push(product);
+        } else {
+          console.log(`  ❌ Rejected: ${product.title}`);
+        }
+        
+        // Small delay to avoid rate limiting
+        if (i < textFiltered.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      }
+      
+      finalFiltered = imageResults;
+      console.log(`\nImage filter: ${finalFiltered.length}/${textFiltered.length} passed (${((finalFiltered.length/textFiltered.length)*100).toFixed(1)}%)`);
+    }
+    
+    // Show rejected samples
+    const rejected = allProducts.filter(p => !finalFiltered.includes(p));
+    if (rejected.length > 0 && rejected.length < allProducts.length) {
+      console.log('\nSample rejected products:');
       rejected.slice(0, 5).forEach(p => console.log(`  ❌ ${p.title}`));
     }
     
@@ -206,10 +329,13 @@ async function scrapeCJDropshipping(searchUrl, searchTerm = null) {
       searchTerm: keyword,
       filters: filters,
       totalFound: allProducts.length,
-      filtered: filtered.length,
-      passRate: ((filtered.length/allProducts.length)*100).toFixed(1) + '%',
+      textFiltered: textFiltered.length,
+      imageFiltered: useImageDetection ? finalFiltered.length : null,
+      filtered: finalFiltered.length,
+      passRate: ((finalFiltered.length/allProducts.length)*100).toFixed(1) + '%',
       pagesScraped: currentPage - 1,
-      products: filtered
+      products: finalFiltered,
+      imageDetectionUsed: useImageDetection
     };
     
   } catch (error) {
@@ -225,14 +351,18 @@ app.post('/api/scrape', async (req, res) => {
   const requestId = Date.now().toString(36);
   console.log(`[${requestId}] POST /api/scrape`, req.body);
   
-  const { searchUrl, searchTerm } = req.body;
+  const { searchUrl, searchTerm, useImageDetection = true } = req.body;
   
   if (!searchUrl && !searchTerm) {
     return res.status(400).json({ error: 'searchUrl or searchTerm required' });
   }
   
   try {
-    const results = await scrapeCJDropshipping(searchUrl || searchTerm, searchTerm);
+    const results = await scrapeCJDropshipping(
+      searchUrl || searchTerm, 
+      searchTerm,
+      useImageDetection
+    );
     res.json({ ...results, requestId });
   } catch (error) {
     console.error(`[${requestId}] Error:`, error);
