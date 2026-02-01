@@ -5,33 +5,6 @@ import './BatchSearch.css';
 // API URL - uses env var in production, proxy in development
 const API_URL = process.env.REACT_APP_API_URL || '';
 
-// Helper: Parse CJ URL to extract keyword and filters
-function parseCJUrl(url) {
-  try {
-    const urlObj = new URL(url);
-    const pathname = urlObj.pathname;
-
-    // Extract keyword from /search/KEYWORD.html
-    const match = pathname.match(/\/search\/(.+?)\.html/);
-    const keyword = match ? decodeURIComponent(match[1]) : '';
-
-    // Extract filters from query params
-    const params = new URLSearchParams(urlObj.search);
-    const options = {};
-
-    if (params.get('verifiedWarehouse') === '1') {
-      options.verifiedWarehouse = true;
-    }
-    if (params.get('startWarehouseInventory')) {
-      options.minInventory = parseInt(params.get('startWarehouseInventory'));
-    }
-
-    return { keyword, options };
-  } catch (e) {
-    return { keyword: '', options: {} };
-  }
-}
-
 function BatchSearch({ shopifyStore, shopifyToken }) {
   const [searches, setSearches] = useState([
     { keyword: '', store: '', url: '', enabled: true }
