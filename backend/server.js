@@ -310,26 +310,48 @@ app.post('/api/scrape', async (req, res) => {
     const textFiltered = apiResult.products.filter(p => isRelevantProduct(p.title, keyword));
 
     // Apply image detection if enabled
-    // LIMIT: Max 50 products to prevent timeout (Vision API is slow ~2-3s per image)
-    const VISION_BATCH_LIMIT = 50;
+    // Uses PARALLEL BATCH PROCESSING for speed (30 images at a time)
     let finalProducts = textFiltered;
-    let skippedImageAnalysis = 0;
+    const BATCH_SIZE = 30; // Process 30 images in parallel
 
     if (useImageDetection && textFiltered.length > 0) {
-      const productsToAnalyze = textFiltered.slice(0, VISION_BATCH_LIMIT);
-      skippedImageAnalysis = Math.max(0, textFiltered.length - VISION_BATCH_LIMIT);
-
-      if (skippedImageAnalysis > 0) {
-        console.log(`⚠️ Limiting Vision analysis to first ${VISION_BATCH_LIMIT} products (skipping ${skippedImageAnalysis} to prevent timeout)`);
-      }
-
-      console.log(`Analyzing ${productsToAnalyze.length} products with Google Vision...`);
+      console.log(`Analyzing ${textFiltered.length} products with Google Vision in batches of ${BATCH_SIZE}...`);
       const imageFiltered = [];
-      for (const product of productsToAnalyze) {
-        if (product.image && await analyzeProductImage(product.image, keyword)) {
-          imageFiltered.push(product);
+
+      // Process in parallel batches
+      for (let i = 0; i < textFiltered.length; i += BATCH_SIZE) {
+        const batch = textFiltered.slice(i, i + BATCH_SIZE);
+        const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+        const totalBatches = Math.ceil(textFiltered.length / BATCH_SIZE);
+
+        console.log(`  Processing batch ${batchNum}/${totalBatches} (${batch.length} products)...`);
+
+        // Analyze all products in batch simultaneously
+        const batchResults = await Promise.all(
+          batch.map(async (product) => {
+            if (product.image) {
+              const passed = await analyzeProductImage(product.image, keyword);
+              return { product, passed };
+            }
+            return { product, passed: false };
+          })
+        );
+
+        // Collect passed products
+        batchResults.forEach(result => {
+          if (result.passed) {
+            imageFiltered.push(result.product);
+          }
+        });
+
+        console.log(`  Batch ${batchNum} complete: ${batchResults.filter(r => r.passed).length}/${batch.length} passed`);
+
+        // Small delay between batches to avoid rate limiting
+        if (i + BATCH_SIZE < textFiltered.length) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
         }
       }
+
       finalProducts = imageFiltered;
     }
 
