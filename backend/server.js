@@ -1,6 +1,5 @@
 const express = require('express');
-const cors = require('cors');
-const puppeteer = require('puppeteer');
+const axios = require('axios');
 require('dotenv').config();
 
 const app = express();
@@ -10,21 +9,24 @@ const PORT = process.env.PORT || 3001;
 // CORS - Manual headers (most reliable method)
 // ============================================
 app.use((req, res, next) => {
-  // Allow all origins
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
 
-  // Handle preflight
   if (req.method === 'OPTIONS') {
     console.log('[CORS] Preflight request from:', req.headers.origin);
     return res.status(200).end();
   }
-
   next();
 });
 
 app.use(express.json());
+
+// ============================================
+// CJ Dropshipping API Configuration
+// ============================================
+const CJ_API_BASE = 'https://developers.cjdropshipping.com/api2.0/v1';
+const CJ_ACCESS_TOKEN = process.env.CJ_ACCESS_TOKEN || '';
 
 // AI-powered product relevance checker
 function isRelevantProduct(productTitle, searchTerm) {
@@ -38,7 +40,7 @@ function isRelevantProduct(productTitle, searchTerm) {
   const primaryMatch = searchWords.some(word => lowerTitle.includes(word));
   if (!primaryMatch) return false;
 
-  // Detect false positives
+  // Detect false positives for sherpa blanket searches
   const falsePositives = [
     'summer blanket', 'air conditioning blanket', 'cooling blanket',
     'beach mat', 'pet blanket', 'dog blanket', 'cat blanket',
@@ -46,16 +48,11 @@ function isRelevantProduct(productTitle, searchTerm) {
     'children', 'infant', 'baby', 'mat', 'quilt'
   ];
 
-  // For "sherpa blanket" search
   if (lowerSearch.includes('sherpa')) {
-    // Must explicitly mention sherpa
     if (!lowerTitle.includes('sherpa')) return false;
-
-    // Reject if it's a pet-only product without sherpa mention
     if (lowerTitle.includes('pet') && !lowerTitle.includes('sherpa')) return false;
   }
 
-  // Check for false positive patterns
   for (const falsePos of falsePositives) {
     if (lowerTitle.includes(falsePos) && !lowerTitle.includes(lowerSearch)) {
       return false;
@@ -65,108 +62,128 @@ function isRelevantProduct(productTitle, searchTerm) {
   return true;
 }
 
-// Scrape CJDropshipping
-async function scrapeCJDropshipping(searchTerm, options = {}) {
-  const browser = await puppeteer.launch({
-    headless: 'new',
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--no-first-run',
-      '--no-zygote',
-      '--single-process',
-      '--disable-extensions'
-    ]
-  });
+// ============================================
+// Search products using CJ's official API
+// ============================================
+async function searchCJProducts(searchTerm, options = {}) {
+  console.log(`[CJ API] Searching for: "${searchTerm}"`);
+
+  // Check if we have an access token
+  if (!CJ_ACCESS_TOKEN) {
+    console.log('[CJ API] No access token - using public search endpoint');
+    // Fallback: Use public product listing (no auth required)
+    return await searchCJPublic(searchTerm, options);
+  }
 
   try {
-    const page = await browser.newPage();
-
-    // Set realistic user agent
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-    await page.setViewport({ width: 1920, height: 1080 });
-
-    // Build URL
-    const baseUrl = 'https://www.cjdropshipping.com/search/';
-    const encodedTerm = encodeURIComponent(searchTerm);
-    let url = `${baseUrl}${encodedTerm}.html?pageNum=1`;
-
-    // Add filters if specified
-    if (options.verifiedWarehouse) {
-      url += '&verifiedWarehouse=1';
-    }
-    if (options.minInventory) {
-      url += `&startWarehouseInventory=${options.minInventory}`;
-    }
-
-    console.log(`Scraping: ${url}`);
-
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
-
-    // Wait for products to load
-    await page.waitForSelector('[data-product-type]', { timeout: 15000 }).catch(() => { });
-
-    // Extract product data
-    const products = await page.evaluate(() => {
-      const items = [];
-      const productElements = document.querySelectorAll('[data-product-type]');
-
-      productElements.forEach(el => {
-        try {
-          const link = el.querySelector('a');
-          const title = el.querySelector('[class*="title"]')?.textContent?.trim() ||
-            link?.textContent?.trim()?.split('\n')[0] || '';
-          const priceEl = el.querySelector('[class*="price"]');
-          const price = priceEl?.textContent?.trim() || '';
-          const href = link?.getAttribute('href') || '';
-          const lists = el.textContent.match(/Lists?:\s*(\d+)/i)?.[1] || '0';
-
-          if (title && href) {
-            items.push({
-              title,
-              price,
-              lists: parseInt(lists),
-              url: href.startsWith('http') ? href : `https://www.cjdropshipping.com${href}`
-            });
-          }
-        } catch (err) {
-          console.error('Parse error:', err);
-        }
-      });
-
-      return items;
+    const response = await axios.get(`${CJ_API_BASE}/product/list`, {
+      params: {
+        productNameEn: searchTerm,
+        pageNum: 1,
+        pageSize: 50,
+      },
+      headers: {
+        'CJ-Access-Token': CJ_ACCESS_TOKEN,
+        'Content-Type': 'application/json'
+      },
+      timeout: 30000
     });
 
-    console.log(`Found ${products.length} products before filtering`);
+    console.log('[CJ API] Response:', response.data);
 
-    // Filter relevant products
-    const filtered = products.filter(p => isRelevantProduct(p.title, searchTerm));
+    if (response.data.code === 200 && response.data.data) {
+      const products = response.data.data.list || [];
 
-    console.log(`${filtered.length} products passed filter (${((filtered.length / products.length) * 100).toFixed(1)}%)`);
+      // Map to our format
+      const mappedProducts = products.map(p => ({
+        title: p.productNameEn || p.productName,
+        price: `$${p.sellPrice || p.productPrice || 0}`,
+        lists: p.listedNum || 0,
+        url: `https://cjdropshipping.com/product/${p.pid}.html`,
+        image: p.productImage,
+        sku: p.productSku
+      }));
 
-    return {
-      success: true,
-      searchTerm,
-      totalFound: products.length,
-      filtered: filtered.length,
-      passRate: ((filtered.length / products.length) * 100).toFixed(1) + '%',
-      products: filtered
-    };
-
+      return {
+        success: true,
+        products: mappedProducts,
+        total: mappedProducts.length,
+        source: 'cj-api'
+      };
+    } else {
+      throw new Error(response.data.message || 'API returned error');
+    }
   } catch (error) {
-    console.error('Scraping error:', error);
-    return {
-      success: false,
-      error: error.message
-    };
-  } finally {
-    await browser.close();
+    console.error('[CJ API] Error:', error.message);
+    // Fallback to public search
+    return await searchCJPublic(searchTerm, options);
   }
 }
 
-// Request logging middleware
+// ============================================
+// Public search (no auth required)
+// Uses CJ's public product feed
+// ============================================
+async function searchCJPublic(searchTerm, options = {}) {
+  console.log(`[CJ Public] Searching for: "${searchTerm}"`);
+
+  try {
+    // CJ's public search API endpoint
+    const response = await axios.get('https://cjdropshipping.com/api/product/productSearch/list', {
+      params: {
+        pageNum: 1,
+        pageSize: 50,
+        productNameEn: searchTerm,
+        verifiedWarehouse: options.verifiedWarehouse ? 1 : undefined,
+      },
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json',
+      },
+      timeout: 30000
+    });
+
+    if (response.data && response.data.data) {
+      const products = response.data.data.list || response.data.data || [];
+
+      const mappedProducts = products.map(p => ({
+        title: p.productNameEn || p.productName || p.title || 'Unknown Product',
+        price: `$${p.sellPrice || p.productPrice || p.price || 0}`,
+        lists: p.listedNum || p.lists || 0,
+        url: p.productUrl || `https://cjdropshipping.com/product/${p.pid || p.id}.html`,
+        image: p.productImage || p.image,
+        sku: p.productSku || p.sku
+      }));
+
+      return {
+        success: true,
+        products: mappedProducts,
+        total: mappedProducts.length,
+        source: 'cj-public'
+      };
+    }
+
+    // If public API doesn't work, return empty results
+    return {
+      success: true,
+      products: [],
+      total: 0,
+      source: 'cj-public-empty'
+    };
+  } catch (error) {
+    console.error('[CJ Public] Error:', error.message);
+    return {
+      success: false,
+      error: error.message,
+      products: [],
+      total: 0
+    };
+  }
+}
+
+// ============================================
+// Request Logging Middleware  
+// ============================================
 app.use((req, res, next) => {
   const requestId = Date.now().toString(36) + Math.random().toString(36).substr(2);
   req.requestId = requestId;
@@ -174,21 +191,24 @@ app.use((req, res, next) => {
   console.log('='.repeat(60));
   console.log(`[${requestId}] ${req.method} ${req.url} at ${new Date().toISOString()}`);
   console.log(`[${requestId}] Origin: ${req.headers.origin || 'none'}`);
-  console.log(`[${requestId}] Body:`, JSON.stringify(req.body, null, 2));
+  if (req.body && Object.keys(req.body).length > 0) {
+    console.log(`[${requestId}] Body:`, JSON.stringify(req.body));
+  }
   console.log('='.repeat(60));
 
   next();
 });
 
+// ============================================
 // API Routes
+// ============================================
 app.post('/api/scrape', async (req, res) => {
-  const { searchTerm, options } = req.body;
+  const { searchTerm, options } = req.body || {};
   const requestId = req.requestId;
 
-  console.log(`[${requestId}] Processing scrape request for: "${searchTerm}"`);
+  console.log(`[${requestId}] Processing search for: "${searchTerm}"`);
 
   if (!searchTerm) {
-    console.error(`[${requestId}] ERROR: searchTerm is missing`);
     return res.status(400).json({
       error: 'searchTerm is required',
       requestId
@@ -197,19 +217,43 @@ app.post('/api/scrape', async (req, res) => {
 
   try {
     const startTime = Date.now();
-    const results = await scrapeCJDropshipping(searchTerm, options || {});
-    const duration = Date.now() - startTime;
 
-    console.log(`[${requestId}] Scrape completed in ${duration}ms - Found ${results.filtered || 0} products`);
+    // Search using CJ API
+    const searchResult = await searchCJProducts(searchTerm.trim(), options || {});
+
+    if (!searchResult.success) {
+      return res.status(500).json({
+        error: searchResult.error || 'Search failed',
+        requestId
+      });
+    }
+
+    // Filter relevant products using AI logic
+    const allProducts = searchResult.products;
+    const filtered = allProducts.filter(p => isRelevantProduct(p.title, searchTerm));
+
+    const duration = Date.now() - startTime;
+    const passRate = allProducts.length > 0
+      ? ((filtered.length / allProducts.length) * 100).toFixed(1) + '%'
+      : '0%';
+
+    console.log(`[${requestId}] Found ${allProducts.length} products, ${filtered.length} passed filter (${passRate})`);
+    console.log(`[${requestId}] Completed in ${duration}ms`);
 
     res.json({
-      ...results,
+      success: true,
+      searchTerm,
+      totalFound: allProducts.length,
+      filtered: filtered.length,
+      passRate,
+      products: filtered,
+      source: searchResult.source,
       requestId,
       processingTime: `${duration}ms`
     });
+
   } catch (error) {
     console.error(`[${requestId}] FATAL ERROR:`, error.message);
-    console.error(`[${requestId}] Stack:`, error.stack);
     res.status(500).json({
       error: error.message,
       requestId
@@ -219,10 +263,14 @@ app.post('/api/scrape', async (req, res) => {
 
 app.get('/health', (req, res) => {
   console.log('[Health] Health check requested');
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    hasApiToken: !!CJ_ACCESS_TOKEN
+  });
 });
 
-// Catch-all for undefined routes (helps debug 404/405 errors)
+// Catch-all for undefined routes
 app.use((req, res) => {
   console.error(`[404] Route not found: ${req.method} ${req.url}`);
   res.status(404).json({
@@ -234,8 +282,8 @@ app.use((req, res) => {
 
 app.listen(PORT, () => {
   console.log('='.repeat(60));
-  console.log(`CJ Scraper API running on port ${PORT}`);
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`Allowed origins: ${allowedOrigins.join(', ')}`);
+  console.log(`🚀 CJ Scraper API running on port ${PORT}`);
+  console.log(`📦 Using CJ API (no Puppeteer)`);
+  console.log(`🔑 CJ Access Token: ${CJ_ACCESS_TOKEN ? 'Configured' : 'Not set (using public API)'}`);
   console.log('='.repeat(60));
 });
