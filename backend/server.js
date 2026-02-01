@@ -3,9 +3,13 @@ const path = require('path');
 const puppeteer = require('puppeteer');
 const axios = require('axios');
 const fs = require('fs');
+const { searchCJProducts } = require('./cj-api-scraper');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
+
+// CJ API Token (preferred method)
+const CJ_API_TOKEN = process.env.CJ_API_TOKEN || '';
 
 // Google Vision API - Support both API Key and Service Account
 const GOOGLE_VISION_API_KEY = process.env.GOOGLE_VISION_API_KEY || '';
@@ -490,11 +494,73 @@ app.post('/api/scrape', async (req, res) => {
   }
   
   try {
-    const results = await scrapeCJDropshipping(
-      searchUrl || searchTerm, 
-      searchTerm,
-      useImageDetection
-    );
+    let results;
+    
+    // Use CJ API if token is available (much faster and reliable)
+    if (CJ_API_TOKEN) {
+      console.log('[API MODE] Using CJ Official API');
+      
+      // Parse search term and filters from URL if provided
+      let keyword = searchTerm || searchUrl;
+      let filters = {};
+      
+      if (searchUrl && searchUrl.includes('cjdropshipping.com')) {
+        const parsed = parseCJUrl(searchUrl);
+        keyword = parsed.keyword;
+        filters = parsed.filters;
+      }
+      
+      const apiResult = await searchCJProducts(keyword, CJ_API_TOKEN, {
+        pageNum: 1,
+        pageSize: 100,
+        verifiedWarehouse: filters.verifiedWarehouse
+      });
+      
+      if (!apiResult.success) {
+        throw new Error(apiResult.error || 'CJ API request failed');
+      }
+      
+      // Apply text filtering
+      const textFiltered = apiResult.products.filter(p => isRelevantProduct(p.title, keyword));
+      
+      // Apply image detection if enabled
+      let finalProducts = textFiltered;
+      if (useImageDetection && textFiltered.length > 0) {
+        console.log(`Analyzing ${textFiltered.length} products with Google Vision...`);
+        const imageFiltered = [];
+        for (const product of textFiltered) {
+          if (product.image && await analyzeProductImage(product.image, keyword)) {
+            imageFiltered.push(product);
+          }
+        }
+        finalProducts = imageFiltered;
+      }
+      
+      results = {
+        success: true,
+        method: 'CJ_API',
+        searchTerm: keyword,
+        filters: filters,
+        totalFound: apiResult.totalProducts,
+        textFiltered: textFiltered.length,
+        imageFiltered: useImageDetection ? finalProducts.length : null,
+        filtered: finalProducts.length,
+        passRate: ((finalProducts.length / apiResult.totalProducts) * 100).toFixed(1) + '%',
+        products: finalProducts,
+        imageDetectionUsed: useImageDetection
+      };
+      
+    } else {
+      // Fallback to Puppeteer scraping (slower, may be blocked)
+      console.log('[SCRAPE MODE] Using Puppeteer (CJ API token not configured)');
+      results = await scrapeCJDropshipping(
+        searchUrl || searchTerm, 
+        searchTerm,
+        useImageDetection
+      );
+      results.method = 'PUPPETEER_SCRAPE';
+    }
+    
     res.json({ ...results, requestId });
   } catch (error) {
     console.error(`[${requestId}] Error:`, error);
