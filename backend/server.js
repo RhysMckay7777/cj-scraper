@@ -218,10 +218,25 @@ async function scrapeCJDropshipping(searchUrl, searchTerm = null, useImageDetect
   try {
     browser = await puppeteer.launch({
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-blink-features=AutomationControlled'
+      ]
     });
     
     const page = await browser.newPage();
+    
+    // Set realistic user agent to avoid detection
+    await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    
+    // Remove webdriver flag
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, 'webdriver', {
+        get: () => false,
+      });
+    });
     
     let baseUrl, keyword, filters;
     
@@ -249,16 +264,26 @@ async function scrapeCJDropshipping(searchUrl, searchTerm = null, useImageDetect
       
       console.log(`Page ${currentPage}: ${url}`);
       
-      await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+      try {
+        await page.goto(url, { waitUntil: 'networkidle2', timeout: 45000 });
+        console.log('✅ Page loaded successfully');
+      } catch (err) {
+        console.error(`❌ Page load failed: ${err.message}`);
+        throw err;
+      }
       
       // Wait for Vue.js to render products
       console.log('Waiting for products to load...');
       
       // Wait for product grid to appear and be populated
       // CJ uses Vue.js which loads data via API after page load
+      console.log('Waiting for product data to load...');
+      
       const productsFound = await page.waitForFunction(() => {
         // Check for product rows
         const rows = document.querySelectorAll('.product-row');
+        console.log(`[waitForFunction] Found ${rows.length} .product-row elements`);
+        
         if (rows.length === 0) return false;
         
         // Check if any row has actual product data (title with text, not Vue template)
@@ -266,17 +291,22 @@ async function scrapeCJDropshipping(searchUrl, searchTerm = null, useImageDetect
           const titleEl = row.querySelector('.product-title h4, .product-title h3, .product-title');
           if (titleEl) {
             const text = titleEl.textContent?.trim() || '';
+            console.log(`[waitForFunction] Title text: "${text.substring(0, 50)}"`);
             // Ignore Vue templates like ${product.nameEn}
             if (text.length > 5 && !text.includes('${')) {
+              console.log('[waitForFunction] ✅ Found valid product!');
               return true;
             }
           }
         }
         return false;
-      }, { timeout: 30000 })
-        .then(() => true)
+      }, { timeout: 45000, polling: 1000 })
+        .then(() => {
+          console.log('✅ Products detected');
+          return true;
+        })
         .catch((err) => {
-          console.error('Timeout waiting for products:', err.message);
+          console.error(`❌ Timeout waiting for products: ${err.message}`);
           return false;
         });
       
