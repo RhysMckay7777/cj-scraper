@@ -1,69 +1,65 @@
-# Google Vision API Setup (API Key Method)
+# Google Vision API Setup
 
-## Super Simple Setup (5 minutes)
+## ✅ You Already Have the Service Account!
 
-### 1. Enable Vision API
+I can see you have the JSON file. Here's how to use it:
 
-1. Go to [Google Cloud Console](https://console.cloud.google.com)
-2. Create a new project (or select existing)
-3. Enable **Cloud Vision API**:
-   - Go to "APIs & Services" → "Library"
-   - Search for "Cloud Vision API"
-   - Click "Enable"
+## Railway Setup (2 Steps)
 
-### 2. Create API Key
+### 1. Deploy to Railway
 
-1. Go to "APIs & Services" → "Credentials"
-2. Click "Create Credentials" → "API Key"
-3. Copy the API key (looks like: `AIzaSyD...`)
-4. **IMPORTANT:** Click "Restrict Key":
-   - Under "API restrictions" → Select "Restrict key"
-   - Choose **"Cloud Vision API"** only
-   - Save
+Click: https://railway.app/new/template?template=https://github.com/RhysMckay7777/cj-scraper
 
-### 3. Add to Railway
+OR manually:
+- Go to railway.app
+- "New Project" → "Deploy from GitHub"  
+- Select `RhysMckay7777/cj-scraper`
 
-1. In Railway dashboard, go to your project
-2. Click "Variables" tab
-3. Add new variable:
-   - **Key:** `GOOGLE_VISION_API_KEY`
-   - **Value:** `5f85b14f0059fd36e7cdb9c5bfe3743cd25eb54d` (or your API key)
-4. Redeploy (Railway will auto-restart)
+### 2. Add Your Service Account JSON
 
-### 4. Test
+In Railway dashboard:
 
-Your scraper will now analyze product images automatically!
+1. Click your project → **"Variables"** tab
+2. Click **"New Variable"**
+3. Add:
+   - **Key:** `GOOGLE_CREDENTIALS_JSON`
+   - **Value:** Paste the entire JSON file contents
 
-Check the logs to see:
+**Use the JSON file you downloaded** (the one from Google Cloud Console).
+
+Open the JSON file and copy its ENTIRE contents, then paste as the value.
+
+4. Railway will auto-restart with image detection enabled
+
+## That's It!
+
+Your scraper will now:
+1. Scrape products from YOUR filtered CJ URL
+2. Filter by text (title must have all keywords)
+3. **Analyze each image with Google Vision**
+4. Reject products where image doesn't match (watches, toys, etc.)
+5. Export only products passing both filters
+
+## Test It
+
+After deployment, test with:
 ```
-Vision API labels for [image]: textile, blanket, fabric
-  ✅ Image passed: valid category
+https://www.cjdropshipping.com/search/fleece+throw+blanket.html?pageNum=1&verifiedWarehouse=1
 ```
+
+Expected results:
+- Text filter: 117 → ~100 products
+- Image filter: 100 → ~95 products  
+- Final: Only actual fleece throw blankets
 
 ## Pricing
 
 - **First 1,000 images/month:** FREE
 - **After 1,000:** $1.50 per 1,000 images
-- **Your typical search (117 products):** ~$0.18 if over free tier
+- **Your typical search (117 products):** FREE (under quota)
 
-## Disable Image Detection (Optional)
+## Disable Image Detection
 
-If you want text-only filtering (no Vision API):
+To skip Vision API and only use text filtering:
 
-Set environment variable:
-- **Key:** `GOOGLE_VISION_API_KEY`
-- **Value:** (leave empty or remove)
-
-The scraper will skip image detection and only use text filtering.
-
-## Troubleshooting
-
-**Error: "API key not configured"**
-→ Add `GOOGLE_VISION_API_KEY` to Railway environment variables
-
-**Error: "API key restrictions"**
-→ Make sure Cloud Vision API is enabled for your key
-
-**Slow scraping:**
-→ Normal - Vision API adds ~500ms per image
-→ For 100 products = ~50 seconds extra
+Remove the `GOOGLE_CREDENTIALS_JSON` variable in Railway.

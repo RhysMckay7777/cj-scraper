@@ -2,12 +2,37 @@ const express = require('express');
 const path = require('path');
 const puppeteer = require('puppeteer');
 const axios = require('axios');
+const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// Google Vision API Key (simpler than service account)
+// Google Vision API - Support both API Key and Service Account
 const GOOGLE_VISION_API_KEY = process.env.GOOGLE_VISION_API_KEY || '';
+const GOOGLE_CREDENTIALS_JSON = process.env.GOOGLE_CREDENTIALS_JSON || '';
+
+// If service account JSON provided as env var, write to file
+if (GOOGLE_CREDENTIALS_JSON) {
+  try {
+    fs.writeFileSync('./google-credentials.json', GOOGLE_CREDENTIALS_JSON);
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = './google-credentials.json';
+    console.log('✅ Google Vision credentials loaded from JSON');
+  } catch (e) {
+    console.error('Failed to write credentials file:', e.message);
+  }
+}
+
+// Initialize Vision API
+let visionAuth = null;
+if (process.env.GOOGLE_APPLICATION_CREDENTIALS || GOOGLE_CREDENTIALS_JSON) {
+  // Use service account
+  console.log('Using Google Vision with Service Account');
+} else if (GOOGLE_VISION_API_KEY) {
+  // Use API key
+  console.log('Using Google Vision with API Key');
+} else {
+  console.warn('⚠️  No Google Vision credentials - image detection disabled');
+}
 
 // Middleware
 app.use(express.json());
@@ -83,9 +108,9 @@ function parseCJUrl(url) {
 // Analyze image with Google Vision API
 async function analyzeProductImage(imageUrl, searchTerm) {
   try {
-    if (!GOOGLE_VISION_API_KEY) {
-      console.log('  ⚠️  Vision API key not configured - skipping image detection');
-      return true; // Default pass if no API key
+    if (!GOOGLE_VISION_API_KEY && !process.env.GOOGLE_APPLICATION_CREDENTIALS && !GOOGLE_CREDENTIALS_JSON) {
+      console.log('  ⚠️  Vision API not configured - skipping image detection');
+      return true; // Default pass if no credentials
     }
     
     // Download image first
@@ -100,19 +125,35 @@ async function analyzeProductImage(imageUrl, searchTerm) {
     const imageBuffer = Buffer.from(response.data);
     const base64Image = imageBuffer.toString('base64');
     
-    // Call Vision API REST endpoint
-    const visionResponse = await axios.post(
-      `https://vision.googleapis.com/v1/images:annotate?key=${GOOGLE_VISION_API_KEY}`,
-      {
-        requests: [{
-          image: { content: base64Image },
-          features: [{ type: 'LABEL_DETECTION', maxResults: 10 }]
-        }]
-      },
-      { timeout: 15000 }
-    );
+    let labels = [];
     
-    const labels = visionResponse.data.responses[0]?.labelAnnotations || [];
+    // Try service account first, fallback to API key
+    if (process.env.GOOGLE_APPLICATION_CREDENTIALS || GOOGLE_CREDENTIALS_JSON) {
+      // Use @google-cloud/vision SDK
+      const vision = require('@google-cloud/vision');
+      const client = new vision.ImageAnnotatorClient();
+      
+      const [result] = await client.labelDetection({
+        image: { content: imageBuffer }
+      });
+      
+      labels = result.labelAnnotations || [];
+    } else if (GOOGLE_VISION_API_KEY) {
+      // Use REST API with API key
+      const visionResponse = await axios.post(
+        `https://vision.googleapis.com/v1/images:annotate?key=${GOOGLE_VISION_API_KEY}`,
+        {
+          requests: [{
+            image: { content: base64Image },
+            features: [{ type: 'LABEL_DETECTION', maxResults: 10 }]
+          }]
+        },
+        { timeout: 15000 }
+      );
+      
+      labels = visionResponse.data.responses[0]?.labelAnnotations || [];
+    }
+    
     const detectedLabels = labels.map(l => l.description.toLowerCase());
     
     console.log(`Vision API labels for ${imageUrl.substring(0, 50)}:`, detectedLabels.slice(0, 5));
