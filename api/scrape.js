@@ -1,4 +1,5 @@
 // Vercel Serverless Function for CJ Scraping
+// Fixed: Pagination + Strict relevance filter (v1.2)
 const puppeteer = require('puppeteer-core');
 const chrome = require('@sparticuz/chromium');
 
