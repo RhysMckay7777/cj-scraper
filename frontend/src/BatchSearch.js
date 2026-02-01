@@ -11,7 +11,7 @@ const API_URL = rawApiUrl && !rawApiUrl.startsWith('http')
 
 function BatchSearch({ shopifyStore, shopifyToken }) {
   const [searches, setSearches] = useState([
-    { keyword: '', store: '', url: '', enabled: true }
+    { keyword: '', url: '', enabled: true }
   ]);
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState([]);
@@ -19,7 +19,7 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
   const [uploading, setUploading] = useState(false);
 
   const addSearch = () => {
-    setSearches([...searches, { keyword: '', store: '', url: '', enabled: true }]);
+    setSearches([...searches, { keyword: '', url: '', enabled: true }]);
   };
 
   const removeSearch = (index) => {
@@ -54,9 +54,7 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
         const search = activeSearches[i];
         const requestBody = {
           searchTerm: search.keyword.trim(),
-          options: {
-            store: search.store || undefined
-          }
+          options: {}
         };
 
         // Debug logging
@@ -82,7 +80,6 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
 
           batchResults.push({
             keyword: search.keyword,
-            store: search.store,
             url: search.url,
             success: true,
             data: response.data
@@ -104,7 +101,6 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
 
           batchResults.push({
             keyword: search.keyword || 'URL provided',
-            store: search.store,
             url: search.url,
             success: false,
             error: err.response?.data?.error || `${err.message} (Status: ${err.response?.status || 'unknown'})`
@@ -131,14 +127,13 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
     const successfulResults = results.filter(r => r.success && r.data.products);
 
     const csv = [
-      ['Keyword', 'Store', 'Product Title', 'Price', 'Lists', 'URL']
+      ['Keyword', 'Product Title', 'Price', 'Lists', 'URL']
     ];
 
     successfulResults.forEach(result => {
       result.data.products.forEach(product => {
         csv.push([
           result.keyword,
-          result.store || '',
           product.title,
           product.price,
           product.lists,
@@ -212,7 +207,6 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
           <div className="searches-header">
             <span className="col-keyword">Keyword/Product</span>
             <span className="col-url">CJ URL (optional)</span>
-            <span className="col-store">Store/Brand (optional)</span>
             <span className="col-actions">Actions</span>
           </div>
 
@@ -238,14 +232,6 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
                 onChange={(e) => updateSearch(index, 'url', e.target.value)}
                 placeholder="https://www.cjdropshipping.com/search/..."
                 className="search-url"
-                disabled={loading || !search.enabled}
-              />
-              <input
-                type="text"
-                value={search.store}
-                onChange={(e) => updateSearch(index, 'store', e.target.value)}
-                placeholder="e.g., Amazon, Nike"
-                className="search-store"
                 disabled={loading || !search.enabled}
               />
               <button
