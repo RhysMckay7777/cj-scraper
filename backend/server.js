@@ -231,6 +231,37 @@ async function analyzeProductImage(imageUrl, searchTerm) {
 
     const validCategoriesArray = Array.from(validCategories);
 
+    // ===========================================
+    // REJECT LABELS - Products to exclude
+    // ===========================================
+    // When searching for blankets, reject pillows/cushions/tapestries
+    const keywordRejects = {
+      'blanket': ['pillow', 'cushion', 'pillowcase', 'tapestry', 'wall art', 'wall hanging', 'curtain', 'drape', 'rug', 'carpet', 'mat', 'toy', 'plush toy', 'stuffed animal', 'doll'],
+      'throw': ['pillow', 'cushion', 'pillowcase', 'tapestry', 'wall art'],
+      'fleece': ['pillow', 'cushion', 'pillowcase']
+    };
+
+    // Build reject list from search words
+    let rejectLabels = new Set();
+    searchWords.forEach(word => {
+      if (keywordRejects[word]) {
+        keywordRejects[word].forEach(reject => rejectLabels.add(reject));
+      }
+    });
+    const rejectLabelsArray = Array.from(rejectLabels);
+
+    // Check for reject labels FIRST
+    if (rejectLabelsArray.length > 0) {
+      const hasRejectMatch = detectedLabels.some(label =>
+        rejectLabelsArray.some(reject =>
+          label.includes(reject) || reject.includes(label)
+        )
+      );
+      if (hasRejectMatch) {
+        return false; // REJECT - this is a pillow/cushion, not a blanket
+      }
+    }
+
     // Check if any detected label matches our dynamic valid categories
     const hasValidMatch = detectedLabels.some(label =>
       validCategoriesArray.some(valid =>
@@ -307,11 +338,22 @@ app.post('/api/scrape', async (req, res) => {
     const textFiltered = apiResult.products.filter(p => isRelevantProduct(p.title, keyword));
 
     // Apply image detection if enabled
+    // LIMIT: Max 50 products to prevent timeout (Vision API is slow ~2-3s per image)
+    const VISION_BATCH_LIMIT = 50;
     let finalProducts = textFiltered;
+    let skippedImageAnalysis = 0;
+
     if (useImageDetection && textFiltered.length > 0) {
-      console.log(`Analyzing ${textFiltered.length} products with Google Vision...`);
+      const productsToAnalyze = textFiltered.slice(0, VISION_BATCH_LIMIT);
+      skippedImageAnalysis = Math.max(0, textFiltered.length - VISION_BATCH_LIMIT);
+
+      if (skippedImageAnalysis > 0) {
+        console.log(`⚠️ Limiting Vision analysis to first ${VISION_BATCH_LIMIT} products (skipping ${skippedImageAnalysis} to prevent timeout)`);
+      }
+
+      console.log(`Analyzing ${productsToAnalyze.length} products with Google Vision...`);
       const imageFiltered = [];
-      for (const product of textFiltered) {
+      for (const product of productsToAnalyze) {
         if (product.image && await analyzeProductImage(product.image, keyword)) {
           imageFiltered.push(product);
         }
