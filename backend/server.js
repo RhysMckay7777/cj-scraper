@@ -235,10 +235,11 @@ async function analyzeProductImage(imageUrl, searchTerm) {
     // REJECT LABELS - Products to exclude
     // ===========================================
     // When searching for blankets, reject pillows/cushions/tapestries
+    // IMPORTANT: Only use specific labels that won't match blankets
     const keywordRejects = {
-      'blanket': ['pillow', 'cushion', 'pillowcase', 'tapestry', 'wall art', 'wall hanging', 'curtain', 'drape', 'rug', 'carpet', 'mat', 'toy', 'plush toy', 'stuffed animal', 'doll'],
-      'throw': ['pillow', 'cushion', 'pillowcase', 'tapestry', 'wall art'],
-      'fleece': ['pillow', 'cushion', 'pillowcase']
+      'blanket': ['pillow', 'cushion', 'pillowcase', 'tapestry', 'wall hanging', 'curtain', 'stuffed toy'],
+      'throw': ['pillow', 'cushion', 'pillowcase'],
+      'fleece': ['pillow', 'cushion']
     };
 
     // Build reject list from search words
@@ -251,10 +252,11 @@ async function analyzeProductImage(imageUrl, searchTerm) {
     const rejectLabelsArray = Array.from(rejectLabels);
 
     // Check for reject labels FIRST
+    // Only reject if label EXACTLY matches or STARTS WITH reject term
     if (rejectLabelsArray.length > 0) {
       const hasRejectMatch = detectedLabels.some(label =>
         rejectLabelsArray.some(reject =>
-          label.includes(reject) || reject.includes(label)
+          label === reject || label.startsWith(reject + ' ')
         )
       );
       if (hasRejectMatch) {
