@@ -1,6 +1,5 @@
 const express = require('express');
 const path = require('path');
-const puppeteer = require('puppeteer');
 const axios = require('axios');
 const fs = require('fs');
 const { searchCJProducts } = require('./cj-api-scraper');
@@ -214,273 +213,7 @@ async function analyzeProductImage(imageUrl, searchTerm) {
   }
 }
 
-// Scrape CJ with Puppeteer
-async function scrapeCJDropshipping(searchUrl, searchTerm = null, useImageDetection = true) {
-  let browser = null;
-  const allProducts = [];
-  
-  try {
-    browser = await puppeteer.launch({
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-blink-features=AutomationControlled'
-      ]
-    });
-    
-    const page = await browser.newPage();
-    
-    // Set realistic user agent to avoid detection
-    await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-    
-    // Remove webdriver flag
-    await page.evaluateOnNewDocument(() => {
-      Object.defineProperty(navigator, 'webdriver', {
-        get: () => false,
-      });
-    });
-    
-    let baseUrl, keyword, filters;
-    
-    if (searchUrl && searchUrl.includes('cjdropshipping.com')) {
-      const parsed = parseCJUrl(searchUrl);
-      keyword = parsed.keyword;
-      filters = parsed.filters;
-      delete filters.pageNum;
-      baseUrl = `https://www.cjdropshipping.com/search/${encodeURIComponent(keyword)}.html`;
-    } else {
-      keyword = searchTerm || searchUrl;
-      filters = {};
-      baseUrl = `https://www.cjdropshipping.com/search/${encodeURIComponent(keyword)}.html`;
-    }
-    
-    console.log('Scraping:', { keyword, filters, baseUrl });
-    
-    let currentPage = 1;
-    let hasMorePages = true;
-    let totalPages = null;
-    
-    while (hasMorePages) {
-      const queryParams = new URLSearchParams({ pageNum: currentPage.toString(), ...filters });
-      const url = `${baseUrl}?${queryParams.toString()}`;
-      
-      console.log(`Page ${currentPage}: ${url}`);
-      
-      try {
-        await page.goto(url, { waitUntil: 'networkidle2', timeout: 45000 });
-        console.log('✅ Page loaded successfully');
-      } catch (err) {
-        console.error(`❌ Page load failed: ${err.message}`);
-        throw err;
-      }
-      
-      // Wait for Vue.js to render products
-      console.log('Waiting for products to load...');
-      
-      // Wait for product grid to appear and be populated
-      // CJ uses Vue.js which loads data via API after page load
-      console.log('Waiting for product data to load...');
-      
-      const productsFound = await page.waitForFunction(() => {
-        // Check for product rows
-        const rows = document.querySelectorAll('.product-row');
-        console.log(`[waitForFunction] Found ${rows.length} .product-row elements`);
-        
-        if (rows.length === 0) return false;
-        
-        // Check if any row has actual product data (title with text, not Vue template)
-        for (let row of rows) {
-          const titleEl = row.querySelector('.product-title h4, .product-title h3, .product-title');
-          if (titleEl) {
-            const text = titleEl.textContent?.trim() || '';
-            console.log(`[waitForFunction] Title text: "${text.substring(0, 50)}"`);
-            // Ignore Vue templates like ${product.nameEn}
-            if (text.length > 5 && !text.includes('${')) {
-              console.log('[waitForFunction] ✅ Found valid product!');
-              return true;
-            }
-          }
-        }
-        return false;
-      }, { timeout: 45000, polling: 1000 })
-        .then(() => {
-          console.log('✅ Products detected');
-          return true;
-        })
-        .catch((err) => {
-          console.error(`❌ Timeout waiting for products: ${err.message}`);
-          return false;
-        });
-      
-      console.log(`Products found on page: ${productsFound}`);
-      
-      if (currentPage === 1) {
-        totalPages = await page.evaluate(() => {
-          const paginationText = document.body.textContent;
-          const pageMatch = paginationText.match(/Page\s+\d+\s+of\s+(\d+)/i) ||
-                           paginationText.match(/\d+\s*\/\s*(\d+)/);
-          if (pageMatch) return parseInt(pageMatch[1]);
-          const paginationButtons = document.querySelectorAll('[class*="pagination"] button, [class*="page"] button');
-          if (paginationButtons.length > 0) {
-            const numbers = Array.from(paginationButtons)
-              .map(btn => parseInt(btn.textContent))
-              .filter(n => !isNaN(n));
-            return numbers.length > 0 ? Math.max(...numbers) : 1;
-          }
-          return 1;
-        });
-        console.log(`Total pages: ${totalPages}`);
-      }
-      
-      const pageProducts = await page.evaluate(() => {
-        const items = [];
-        // Use .product-row (works for both search and local products)
-        const productElements = document.querySelectorAll('.product-row');
-        console.log(`[Puppeteer] Found ${productElements.length} product elements`);
-        
-        productElements.forEach(el => {
-          try {
-            // Multiple ways to find title (CJ uses different structures)
-            let title = el.querySelector('.product-title h4')?.textContent?.trim() ||
-                       el.querySelector('.product-title h3')?.textContent?.trim() ||
-                       el.querySelector('.product-title')?.textContent?.trim() ||
-                       el.querySelector('[class*="title"]')?.textContent?.trim() || '';
-            
-            // Skip Vue templates and empty titles
-            if (!title || title.includes('${') || title.length < 5) {
-              return;
-            }
-            
-            // Find link
-            const link = el.querySelector('a[href*="/product/"]') || el.querySelector('a');
-            const href = link?.getAttribute('href') || '';
-            
-            if (!href || !href.includes('/product/')) {
-              return;
-            }
-            
-            // Price
-            const priceEl = el.querySelector('[class*="price"]');
-            const price = priceEl?.textContent?.trim() || '';
-            
-            // Lists
-            const lists = el.textContent.match(/Lists?:\s*(\d+)/i)?.[1] || '0';
-            
-            // Image
-            const img = el.querySelector('img');
-            const imageUrl = img?.getAttribute('src') || img?.getAttribute('data-src') || '';
-            
-            items.push({
-              title,
-              price,
-              lists: parseInt(lists),
-              url: href.startsWith('http') ? href : `https://www.cjdropshipping.com${href}`,
-              image: imageUrl
-            });
-          } catch (err) {
-            console.error('Parse error:', err);
-          }
-        });
-        return items;
-      });
-      
-      console.log(`Page ${currentPage}: ${pageProducts.length} products`);
-      
-      if (pageProducts.length === 0) {
-        hasMorePages = false;
-        break;
-      }
-      
-      allProducts.push(...pageProducts);
-      
-      currentPage++;
-      if (totalPages && currentPage > totalPages) {
-        hasMorePages = false;
-      }
-      if (currentPage > 10) {
-        console.log('Safety limit: 10 pages');
-        hasMorePages = false;
-      }
-      
-      if (hasMorePages) {
-        await new Promise(resolve => setTimeout(resolve, 1500));
-      }
-    }
-    
-    console.log(`Total: ${allProducts.length} products across ${currentPage - 1} pages`);
-    
-    // STEP 1: Text filter (fast)
-    console.log('\n=== STEP 1: Text Filtering ===');
-    const textFiltered = allProducts.filter(p => isRelevantProduct(p.title, keyword));
-    console.log(`Text filter: ${textFiltered.length}/${allProducts.length} passed (${((textFiltered.length/allProducts.length)*100).toFixed(1)}%)`);
-    
-    // STEP 2: Image detection (slow, only on text-passed products)
-    let finalFiltered = textFiltered;
-    
-    if (useImageDetection && textFiltered.length > 0) {
-      console.log('\n=== STEP 2: Image Detection (Google Vision API) ===');
-      console.log(`Analyzing ${textFiltered.length} product images...`);
-      
-      const imageResults = [];
-      
-      for (let i = 0; i < textFiltered.length; i++) {
-        const product = textFiltered[i];
-        console.log(`[${i + 1}/${textFiltered.length}] Analyzing: ${product.title.substring(0, 50)}...`);
-        
-        if (!product.image || !product.image.startsWith('http')) {
-          console.log('  ⚠️  No valid image URL - skipping Vision API');
-          imageResults.push(product); // Keep products without images (default pass)
-          continue;
-        }
-        
-        const imageMatches = await analyzeProductImage(product.image, keyword);
-        
-        if (imageMatches) {
-          imageResults.push(product);
-        } else {
-          console.log(`  ❌ Rejected: ${product.title}`);
-        }
-        
-        // Small delay to avoid rate limiting
-        if (i < textFiltered.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 500));
-        }
-      }
-      
-      finalFiltered = imageResults;
-      console.log(`\nImage filter: ${finalFiltered.length}/${textFiltered.length} passed (${((finalFiltered.length/textFiltered.length)*100).toFixed(1)}%)`);
-    }
-    
-    // Show rejected samples
-    const rejected = allProducts.filter(p => !finalFiltered.includes(p));
-    if (rejected.length > 0 && rejected.length < allProducts.length) {
-      console.log('\nSample rejected products:');
-      rejected.slice(0, 5).forEach(p => console.log(`  ❌ ${p.title}`));
-    }
-    
-    return {
-      success: true,
-      searchTerm: keyword,
-      filters: filters,
-      totalFound: allProducts.length,
-      textFiltered: textFiltered.length,
-      imageFiltered: useImageDetection ? finalFiltered.length : null,
-      filtered: finalFiltered.length,
-      passRate: ((finalFiltered.length/allProducts.length)*100).toFixed(1) + '%',
-      pagesScraped: currentPage - 1,
-      products: finalFiltered,
-      imageDetectionUsed: useImageDetection
-    };
-    
-  } catch (error) {
-    console.error('Scraping error:', error);
-    return { success: false, error: error.message };
-  } finally {
-    if (browser) await browser.close();
-  }
-}
+// Removed Puppeteer scraping - using CJ API exclusively for better reliability and speed
 
 // API Routes
 app.post('/api/scrape', async (req, res) => {
@@ -493,73 +226,65 @@ app.post('/api/scrape', async (req, res) => {
     return res.status(400).json({ error: 'searchUrl or searchTerm required' });
   }
   
+  // Require CJ API token
+  if (!CJ_API_TOKEN) {
+    return res.status(500).json({ 
+      error: 'CJ_API_TOKEN environment variable is required. Puppeteer scraping has been removed for better reliability.' 
+    });
+  }
+  
   try {
-    let results;
+    console.log('[API MODE] Using CJ Official API');
     
-    // Use CJ API if token is available (much faster and reliable)
-    if (CJ_API_TOKEN) {
-      console.log('[API MODE] Using CJ Official API');
-      
-      // Parse search term and filters from URL if provided
-      let keyword = searchTerm || searchUrl;
-      let filters = {};
-      
-      if (searchUrl && searchUrl.includes('cjdropshipping.com')) {
-        const parsed = parseCJUrl(searchUrl);
-        keyword = parsed.keyword;
-        filters = parsed.filters;
-      }
-      
-      const apiResult = await searchCJProducts(keyword, CJ_API_TOKEN, {
-        pageNum: 1,
-        pageSize: 100,
-        verifiedWarehouse: filters.verifiedWarehouse
-      });
-      
-      if (!apiResult.success) {
-        throw new Error(apiResult.error || 'CJ API request failed');
-      }
-      
-      // Apply text filtering
-      const textFiltered = apiResult.products.filter(p => isRelevantProduct(p.title, keyword));
-      
-      // Apply image detection if enabled
-      let finalProducts = textFiltered;
-      if (useImageDetection && textFiltered.length > 0) {
-        console.log(`Analyzing ${textFiltered.length} products with Google Vision...`);
-        const imageFiltered = [];
-        for (const product of textFiltered) {
-          if (product.image && await analyzeProductImage(product.image, keyword)) {
-            imageFiltered.push(product);
-          }
-        }
-        finalProducts = imageFiltered;
-      }
-      
-      results = {
-        success: true,
-        method: 'CJ_API',
-        searchTerm: keyword,
-        filters: filters,
-        totalFound: apiResult.totalProducts,
-        textFiltered: textFiltered.length,
-        imageFiltered: useImageDetection ? finalProducts.length : null,
-        filtered: finalProducts.length,
-        passRate: ((finalProducts.length / apiResult.totalProducts) * 100).toFixed(1) + '%',
-        products: finalProducts,
-        imageDetectionUsed: useImageDetection
-      };
-      
-    } else {
-      // Fallback to Puppeteer scraping (slower, may be blocked)
-      console.log('[SCRAPE MODE] Using Puppeteer (CJ API token not configured)');
-      results = await scrapeCJDropshipping(
-        searchUrl || searchTerm, 
-        searchTerm,
-        useImageDetection
-      );
-      results.method = 'PUPPETEER_SCRAPE';
+    // Parse search term and filters from URL if provided
+    let keyword = searchTerm || searchUrl;
+    let filters = {};
+    
+    if (searchUrl && searchUrl.includes('cjdropshipping.com')) {
+      const parsed = parseCJUrl(searchUrl);
+      keyword = parsed.keyword;
+      filters = parsed.filters;
     }
+    
+    const apiResult = await searchCJProducts(keyword, CJ_API_TOKEN, {
+      pageNum: 1,
+      pageSize: 100,
+      verifiedWarehouse: filters.verifiedWarehouse
+    });
+    
+    if (!apiResult.success) {
+      throw new Error(apiResult.error || 'CJ API request failed');
+    }
+    
+    // Apply text filtering
+    const textFiltered = apiResult.products.filter(p => isRelevantProduct(p.title, keyword));
+    
+    // Apply image detection if enabled
+    let finalProducts = textFiltered;
+    if (useImageDetection && textFiltered.length > 0) {
+      console.log(`Analyzing ${textFiltered.length} products with Google Vision...`);
+      const imageFiltered = [];
+      for (const product of textFiltered) {
+        if (product.image && await analyzeProductImage(product.image, keyword)) {
+          imageFiltered.push(product);
+        }
+      }
+      finalProducts = imageFiltered;
+    }
+    
+    const results = {
+      success: true,
+      method: 'CJ_API',
+      searchTerm: keyword,
+      filters: filters,
+      totalFound: apiResult.totalProducts,
+      textFiltered: textFiltered.length,
+      imageFiltered: useImageDetection ? finalProducts.length : null,
+      filtered: finalProducts.length,
+      passRate: ((finalProducts.length / apiResult.totalProducts) * 100).toFixed(1) + '%',
+      products: finalProducts,
+      imageDetectionUsed: useImageDetection
+    };
     
     res.json({ ...results, requestId });
   } catch (error) {
