@@ -9,7 +9,7 @@ const API_URL = rawApiUrl && !rawApiUrl.startsWith('http')
   ? `https://${rawApiUrl}`
   : rawApiUrl;
 
-function BatchSearch({ shopifyStore, shopifyToken }) {
+function BatchSearch({ stores, activeStore, activeStoreId, setActiveStoreId }) {
   const [searches, setSearches] = useState([
     { keyword: '', url: '', enabled: true }
   ]);
@@ -175,8 +175,8 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
   };
 
   const uploadToShopify = async () => {
-    if (!shopifyStore || !shopifyToken) {
-      alert('Please configure your Shopify store first (click Settings button in header)');
+    if (!activeStore) {
+      alert('Please add a Shopify store first (click Settings button in header)');
       return;
     }
 
@@ -204,8 +204,8 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
     try {
       const response = await axios.post(`${API_URL}/api/upload-shopify`, {
         products: allProducts,
-        shopifyStore,
-        shopifyToken,
+        shopifyStore: activeStore.url,
+        shopifyToken: activeStore.token,
         markup: 250 // Default 250% markup
       });
 
@@ -294,13 +294,33 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
                 <button onClick={exportResults} className="export-btn">
                   📥 Export CSV
                 </button>
-                <button
-                  onClick={uploadToShopify}
-                  className="shopify-btn"
-                  disabled={uploading}
-                >
-                  {uploading ? '⏳ Uploading...' : '🏪 Upload to Shopify'}
-                </button>
+
+                {/* Store selector for upload */}
+                <div className="upload-section">
+                  {stores.length > 1 && (
+                    <select
+                      className="upload-store-selector"
+                      value={activeStoreId || ''}
+                      onChange={(e) => setActiveStoreId(e.target.value)}
+                    >
+                      {stores.map(store => (
+                        <option key={store.id} value={store.id}>
+                          {store.name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  <button
+                    onClick={uploadToShopify}
+                    className="shopify-btn"
+                    disabled={uploading || !activeStore}
+                    title={activeStore ? `Upload to ${activeStore.name}` : 'Add a store first'}
+                  >
+                    {uploading
+                      ? '⏳ Uploading...'
+                      : `🏪 Upload to ${activeStore?.name || 'Shopify'}`}
+                  </button>
+                </div>
               </div>
             )}
           </div>
