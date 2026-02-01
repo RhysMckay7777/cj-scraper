@@ -1,18 +1,19 @@
 {
   "name": "cj-scraper",
-  "version": "1.0.0",
-  "description": "CJ Dropshipping Smart Scraper",
-  "main": "api/scrape.js",
-  "dependencies": {
-    "puppeteer-core": "^21.6.1",
-    "@sparticuz/chromium": "^119.0.2",
-    "axios": "^1.6.0"
-  },
-  "devDependencies": {},
+  "version": "2.0.0",
+  "description": "CJ Dropshipping Smart Scraper with Vision API",
+  "main": "backend/server.js",
   "scripts": {
-    "test": "echo \"No tests specified\""
+    "install:backend": "cd backend && npm install",
+    "install:frontend": "cd frontend && npm install",
+    "build:frontend": "cd frontend && npm run build",
+    "build": "npm run install:backend && npm run install:frontend && npm run build:frontend",
+    "start": "node backend/server.js"
   },
-  "keywords": ["scraper", "cj", "dropshipping"],
+  "keywords": ["scraper", "cj", "dropshipping", "vision-api"],
   "author": "Rhys McKay",
-  "license": "MIT"
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
 }
