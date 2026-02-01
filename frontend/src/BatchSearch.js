@@ -17,6 +17,7 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
   const [results, setResults] = useState([]);
   const [error, setError] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [expandedResults, setExpandedResults] = useState({}); // Track which results are expanded
 
   const addSearch = () => {
     setSearches([...searches, { keyword: '', url: '', enabled: true }]);
@@ -24,6 +25,13 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
 
   const removeSearch = (index) => {
     setSearches(searches.filter((_, i) => i !== index));
+  };
+
+  const toggleExpanded = (index) => {
+    setExpandedResults(prev => ({
+      ...prev,
+      [index]: !prev[index]
+    }));
   };
 
   const updateSearch = (index, field, value) => {
@@ -52,7 +60,7 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
 
       for (let i = 0; i < activeSearches.length; i++) {
         const search = activeSearches[i];
-        
+
         // Send URL (new backend) + searchTerm extracted (old backend compatibility)
         // Extract search term from URL for backward compatibility
         let searchTerm = '';
@@ -64,12 +72,12 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
             searchTerm = '';
           }
         }
-        
-        const requestBody = search.url.trim() 
-          ? { 
-              searchUrl: search.url.trim(),
-              searchTerm: searchTerm || 'fleece throw blanket' // Fallback
-            }
+
+        const requestBody = search.url.trim()
+          ? {
+            searchUrl: search.url.trim(),
+            searchTerm: searchTerm || 'fleece throw blanket' // Fallback
+          }
           : { searchTerm: search.keyword.trim() };
 
         // Debug logging
@@ -215,11 +223,11 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
       <div className="batch-header">
         <h2>📦 Batch Search</h2>
         <p className="batch-instructions">
-          <strong>📋 How to use:</strong><br/>
-          1. Go to CJDropshipping and search for your product<br/>
-          2. Apply any filters you want (Verified Warehouse, Min Inventory, etc.)<br/>
-          3. Copy the full URL from your browser<br/>
-          4. Paste it below → Click "Start Batch Scrape"<br/>
+          <strong>📋 How to use:</strong><br />
+          1. Go to CJDropshipping and search for your product<br />
+          2. Apply any filters you want (Verified Warehouse, Min Inventory, etc.)<br />
+          3. Copy the full URL from your browser<br />
+          4. Paste it below → Click "Start Batch Scrape"<br />
           <em>The scraper will find all products from YOUR filtered search only.</em>
         </p>
       </div>
@@ -314,7 +322,7 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
 
               {result.success && result.data && result.data.products && result.data.products.length > 0 ? (
                 <div className="mini-product-grid">
-                  {result.data.products.slice(0, 6).map((product, pidx) => (
+                  {(expandedResults[index] ? result.data.products : result.data.products.slice(0, 6)).map((product, pidx) => (
                     <div key={pidx} className="mini-product-card">
                       <div className="mini-product-title">{product.title}</div>
                       <div className="mini-product-info">
@@ -326,9 +334,14 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
                     </div>
                   ))}
                   {result.data.products.length > 6 && (
-                    <div className="more-products">
-                      +{result.data.products.length - 6} more
-                    </div>
+                    <button
+                      className="more-products-btn"
+                      onClick={() => toggleExpanded(index)}
+                    >
+                      {expandedResults[index]
+                        ? '⬆️ Show less'
+                        : `⬇️ +${result.data.products.length - 6} more`}
+                    </button>
                   )}
                 </div>
               ) : result.error ? (

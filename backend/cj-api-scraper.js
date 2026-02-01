@@ -61,10 +61,13 @@ async function searchCJProducts(searchTerm, cjToken, options = {}) {
     // /product/list returns: { pageNum, pageSize, total, list: [...] }
     const productList = data.list || [];
     const totalCount = data.total || productList.length;
-    const totalPages = Math.ceil(totalCount / pageSize);
+    // Use API's actual pageSize for pagination calculation, not our requested one
+    const apiPageSize = data.pageSize || pageSize;
+    const totalPages = Math.ceil(totalCount / apiPageSize);
 
-    console.log(`[CJ API] Found ${totalCount} total products across ${totalPages} pages`);
-    console.log(`[CJ API] Returned ${productList.length} products on page ${pageNum}`);
+    console.log(`[CJ API] API Response: total=${totalCount}, pageSize=${apiPageSize}, pageNum=${data.pageNum}`);
+    console.log(`[CJ API] Found ${totalCount} total products across ${totalPages} pages (${apiPageSize} per page)`);
+    console.log(`[CJ API] Page ${pageNum}: received ${productList.length} products`);
 
     // Helper function to generate URL slug from product name
     const generateSlug = (name) => {
@@ -79,7 +82,7 @@ async function searchCJProducts(searchTerm, cjToken, options = {}) {
     let products = productList.map(product => {
       const productName = product.productNameEn || product.productName || '';
       const slug = generateSlug(productName);
-      
+
       return {
         title: productName,
         price: `$${product.sellPrice || 0}`,
@@ -96,17 +99,17 @@ async function searchCJProducts(searchTerm, cjToken, options = {}) {
     // NEW: Fetch all pages if requested
     if (fetchAllPages && totalPages > 1) {
       console.log(`[CJ API] Fetching remaining ${totalPages - 1} pages...`);
-      
+
       for (let page = 2; page <= totalPages; page++) {
         // Add delay to avoid rate limiting (CJ API limit: 1 request per second)
         await new Promise(resolve => setTimeout(resolve, 1100));
-        
+
         const nextPageResult = await searchCJProducts(searchTerm, cjToken, {
           ...options,
           pageNum: page,
           fetchAllPages: false // Don't recurse infinitely
         });
-        
+
         if (nextPageResult.success) {
           products = products.concat(nextPageResult.products);
           console.log(`[CJ API] Fetched page ${page}/${totalPages} - Total products so far: ${products.length}`);
@@ -114,7 +117,7 @@ async function searchCJProducts(searchTerm, cjToken, options = {}) {
           console.error(`[CJ API] Failed to fetch page ${page}: ${nextPageResult.error}`);
         }
       }
-      
+
       console.log(`[CJ API] ✅ Fetched all ${totalPages} pages - Total: ${products.length} products`);
     }
 
@@ -122,6 +125,7 @@ async function searchCJProducts(searchTerm, cjToken, options = {}) {
       success: true,
       products: products,
       totalProducts: totalCount,
+      actualFetched: products.length, // Actual count fetched (may differ from total)
       currentPage: pageNum,
       totalPages: totalPages,
       fetchedPages: fetchAllPages ? totalPages : 1
@@ -152,7 +156,7 @@ async function searchCJProducts(searchTerm, cjToken, options = {}) {
 async function getCJCategories(cjToken) {
   try {
     console.log('[CJ API] Fetching category list...');
-    
+
     const response = await axios.get(`${CJ_API_BASE}/product/getCategory`, {
       headers: {
         'CJ-Access-Token': cjToken,
@@ -167,17 +171,17 @@ async function getCJCategories(cjToken) {
 
     const categories = response.data.data || [];
     console.log(`[CJ API] Retrieved ${categories.length} top-level categories`);
-    
+
     // Flatten the category tree for easier searching
     const flatCategories = [];
-    
+
     categories.forEach(cat1 => {
       const cat1Info = {
         level: 1,
         name: cat1.categoryFirstName,
         id: null
       };
-      
+
       if (cat1.categoryFirstList) {
         cat1.categoryFirstList.forEach(cat2 => {
           const cat2Info = {
@@ -186,7 +190,7 @@ async function getCJCategories(cjToken) {
             name: cat2.categorySecondName,
             id: null
           };
-          
+
           if (cat2.categorySecondList) {
             cat2.categorySecondList.forEach(cat3 => {
               flatCategories.push({

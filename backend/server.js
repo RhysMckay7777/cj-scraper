@@ -341,12 +341,16 @@ app.post('/api/scrape', async (req, res) => {
     console.log(`Filters: ${JSON.stringify(filters)}`);
     const usedCategoryId = filters.categoryId || filters.id || null;
     console.log(`Category ID: ${usedCategoryId || 'NONE - will return ALL products!'}`);
-    console.log(`CJ API Total: ${apiResult.totalProducts} products (${apiResult.fetchedPages || 1} pages)`);
-    console.log(`After Text Filter: ${textFiltered.length}/${apiResult.totalProducts} passed (${((textFiltered.length / apiResult.totalProducts) * 100).toFixed(1)}%)`);
+    console.log(`---`);
+    console.log(`📥 CJ API: ${apiResult.totalProducts} total (${apiResult.fetchedPages || 1} pages scraped)`);
+    console.log(`📥 Actually Fetched: ${apiResult.actualFetched || apiResult.products?.length || 0} products`);
+    console.log(`---`);
+    console.log(`📝 Text Filter: ${textFiltered.length}/${apiResult.actualFetched || apiResult.totalProducts} passed (${((textFiltered.length / (apiResult.actualFetched || apiResult.totalProducts)) * 100).toFixed(1)}%)`);
     if (useImageDetection) {
-      console.log(`After Image Filter: ${finalProducts.length}/${textFiltered.length} passed (${((finalProducts.length / textFiltered.length) * 100).toFixed(1)}%)`);
+      console.log(`🖼️  Image Filter: ${finalProducts.length}/${textFiltered.length} passed (${textFiltered.length > 0 ? ((finalProducts.length / textFiltered.length) * 100).toFixed(1) : 0}%)`);
     }
-    console.log(`FINAL: ${finalProducts.length} products (${results.passRate} overall pass rate)`);
+    console.log(`---`);
+    console.log(`✅ FINAL: ${finalProducts.length} products (${results.passRate} overall pass rate)`);
     console.log(`=====================================\n`);
 
     res.json({ ...results, requestId });
