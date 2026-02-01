@@ -6,27 +6,23 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// CORS configuration - Allow all origins for now (can be restricted later)
-// Add your Vercel frontend URLs here
-const allowedOrigins = [
-  'http://localhost:3000',
-  'http://localhost:5173',
-  'https://cj-scraper.vercel.app',  // Your Vercel frontend
-  process.env.FRONTEND_URL, // Additional URL from env var
-].filter(Boolean);
+// ============================================
+// CORS - Manual headers (most reliable method)
+// ============================================
+app.use((req, res, next) => {
+  // Allow all origins
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
 
-console.log('Allowed CORS origins:', allowedOrigins);
+  // Handle preflight
+  if (req.method === 'OPTIONS') {
+    console.log('[CORS] Preflight request from:', req.headers.origin);
+    return res.status(200).end();
+  }
 
-// Use simple CORS that allows all origins (most reliable)
-app.use(cors({
-  origin: '*',  // Allow all origins
-  credentials: false,  // Must be false when origin is '*'
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
-}));
-
-// Handle preflight requests explicitly
-app.options('*', cors());
+  next();
+});
 
 app.use(express.json());
 
