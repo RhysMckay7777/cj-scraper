@@ -68,17 +68,14 @@ function isRelevantProduct(productTitle, searchTerm) {
 
   // Extract main keywords (words > 2 chars)
   const searchWords = lowerSearch.split(' ').filter(w => w.length > 2);
-  
+
   // RELAXED: At least HALF of the search words should be present (not ALL)
   const matchingWords = searchWords.filter(word => lowerTitle.includes(word));
   const matchRatio = matchingWords.length / searchWords.length;
-  
+
   if (matchRatio < 0.5) {
-    console.log(`  ❌ Text filter: Only ${matchRatio * 100}% match for "${productTitle}"`);
     return false;
   }
-
-  console.log(`  ✅ Text filter: ${matchRatio * 100}% match for "${productTitle}"`);
   return true;
 }
 
@@ -152,8 +149,6 @@ async function analyzeProductImage(imageUrl, searchTerm) {
     }
 
     const detectedLabels = labels.map(l => l.description.toLowerCase());
-
-    console.log(`Vision API labels for ${imageUrl.substring(0, 50)}:`, detectedLabels.slice(0, 7));
 
     // ===========================================
     // DYNAMIC CATEGORY DETECTION
@@ -236,7 +231,6 @@ async function analyzeProductImage(imageUrl, searchTerm) {
     });
 
     const validCategoriesArray = Array.from(validCategories);
-    console.log(`  📋 Dynamic valid categories for "${searchTerm}":`, validCategoriesArray.slice(0, 10));
 
     // Check if any detected label matches our dynamic valid categories
     const hasValidMatch = detectedLabels.some(label =>
@@ -251,11 +245,9 @@ async function analyzeProductImage(imageUrl, searchTerm) {
     );
 
     if (hasValidMatch || hasSearchTermMatch) {
-      console.log(`  ✅ Image PASSED: matches search category "${searchTerm}"`);
       return true;
     }
 
-    console.log(`  ❌ Image rejected: labels don't match "${searchTerm}" category`);
     return false;
 
   } catch (error) {
@@ -304,7 +296,7 @@ app.post('/api/scrape', async (req, res) => {
       pageNum: 1,
       pageSize: 200, // Max allowed by CJ API
       verifiedWarehouse: filters.verifiedWarehouse,
-      categoryId: filters.categoryId || null, // Support category filtering
+      categoryId: filters.categoryId || filters.id || null, // Support category filtering (CJ website uses 'id' param)
       fetchAllPages: true // NEW: Fetch all pages automatically
     });
 
@@ -334,6 +326,7 @@ app.post('/api/scrape', async (req, res) => {
       searchTerm: keyword,
       filters: filters,
       totalFound: apiResult.totalProducts,
+      pagesScraped: apiResult.fetchedPages || 1,
       textFiltered: textFiltered.length,
       imageFiltered: useImageDetection ? finalProducts.length : null,
       filtered: finalProducts.length,
@@ -341,6 +334,20 @@ app.post('/api/scrape', async (req, res) => {
       products: finalProducts,
       imageDetectionUsed: useImageDetection
     };
+
+    // Clean summary log
+    console.log(`\n========== SCRAPE SUMMARY ==========`);
+    console.log(`Search Term: "${keyword}"`);
+    console.log(`Filters: ${JSON.stringify(filters)}`);
+    const usedCategoryId = filters.categoryId || filters.id || null;
+    console.log(`Category ID: ${usedCategoryId || 'NONE - will return ALL products!'}`);
+    console.log(`CJ API Total: ${apiResult.totalProducts} products (${apiResult.fetchedPages || 1} pages)`);
+    console.log(`After Text Filter: ${textFiltered.length}/${apiResult.totalProducts} passed (${((textFiltered.length / apiResult.totalProducts) * 100).toFixed(1)}%)`);
+    if (useImageDetection) {
+      console.log(`After Image Filter: ${finalProducts.length}/${textFiltered.length} passed (${((finalProducts.length / textFiltered.length) * 100).toFixed(1)}%)`);
+    }
+    console.log(`FINAL: ${finalProducts.length} products (${results.passRate} overall pass rate)`);
+    console.log(`=====================================\n`);
 
     res.json({ ...results, requestId });
   } catch (error) {
@@ -357,7 +364,7 @@ app.get('/api/categories', async (req, res) => {
 
   try {
     const result = await getCJCategories(CJ_API_TOKEN);
-    
+
     if (!result.success) {
       throw new Error(result.error || 'Failed to fetch categories');
     }
