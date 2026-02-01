@@ -17,11 +17,23 @@ const GOOGLE_CREDENTIALS_JSON = process.env.GOOGLE_CREDENTIALS_JSON || '';
 // If service account JSON provided as env var, write to file
 if (GOOGLE_CREDENTIALS_JSON) {
   try {
-    fs.writeFileSync('./google-credentials.json', GOOGLE_CREDENTIALS_JSON);
+    // Parse and re-stringify to validate JSON and handle escaped characters
+    let credentials;
+    try {
+      credentials = JSON.parse(GOOGLE_CREDENTIALS_JSON);
+    } catch (parseErr) {
+      // Try replacing escaped newlines first
+      const fixedJson = GOOGLE_CREDENTIALS_JSON.replace(/\\n/g, '\n');
+      credentials = JSON.parse(fixedJson);
+    }
+
+    // Write valid JSON to file
+    fs.writeFileSync('./google-credentials.json', JSON.stringify(credentials, null, 2));
     process.env.GOOGLE_APPLICATION_CREDENTIALS = './google-credentials.json';
     console.log('✅ Google Vision credentials loaded from JSON');
   } catch (e) {
-    console.error('Failed to write credentials file:', e.message);
+    console.error('Failed to parse/write credentials:', e.message);
+    console.log('⚠️ Continuing without Google Vision - text filter only');
   }
 }
 
@@ -53,11 +65,11 @@ app.use((req, res, next) => {
 function isRelevantProduct(productTitle, searchTerm) {
   const lowerTitle = productTitle.toLowerCase();
   const lowerSearch = searchTerm.toLowerCase();
-  
+
   const searchWords = lowerSearch.split(' ').filter(w => w.length > 2);
   const allWordsPresent = searchWords.every(word => lowerTitle.includes(word));
   if (!allWordsPresent) return false;
-  
+
   const invalidCategories = [
     'hoodie', 'sweatshirt', 'jacket', 'coat', 'sweater', 'shirt', 'pants', 'joggers',
     'pullover', 'cardigan', 'vest', 'shorts', 'leggings', 'dress', 'skirt',
@@ -68,23 +80,23 @@ function isRelevantProduct(productTitle, searchTerm) {
     'sheet', 'duvet', 'comforter', 'quilt cover',
     'scarf', 'shawl', 'gloves', 'mittens', 'hat', 'beanie'
   ];
-  
+
   for (const invalid of invalidCategories) {
     if (lowerTitle.includes(invalid)) {
-      const hasBlanketsAfter = lowerTitle.includes(invalid + ' blanket') || 
-                               lowerTitle.includes(invalid + ' throw');
+      const hasBlanketsAfter = lowerTitle.includes(invalid + ' blanket') ||
+        lowerTitle.includes(invalid + ' throw');
       if (!hasBlanketsAfter) return false;
     }
   }
-  
+
   if (lowerSearch.includes('throw') && lowerSearch.includes('blanket')) {
     if (!lowerTitle.includes('throw') || !lowerTitle.includes('blanket')) return false;
   }
-  
+
   if (lowerSearch.includes('sherpa')) {
     if (!lowerTitle.includes('sherpa')) return false;
   }
-  
+
   return true;
 }
 
@@ -115,31 +127,31 @@ async function analyzeProductImage(imageUrl, searchTerm) {
       console.log('  ⚠️  Vision API not configured - skipping image detection');
       return true; // Default pass if no credentials
     }
-    
+
     // Download image first
-    const response = await axios.get(imageUrl, { 
+    const response = await axios.get(imageUrl, {
       responseType: 'arraybuffer',
       timeout: 10000,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
       }
     });
-    
+
     const imageBuffer = Buffer.from(response.data);
     const base64Image = imageBuffer.toString('base64');
-    
+
     let labels = [];
-    
+
     // Try service account first, fallback to API key
     if (process.env.GOOGLE_APPLICATION_CREDENTIALS || GOOGLE_CREDENTIALS_JSON) {
       // Use @google-cloud/vision SDK
       const vision = require('@google-cloud/vision');
       const client = new vision.ImageAnnotatorClient();
-      
+
       const [result] = await client.labelDetection({
         image: { content: imageBuffer }
       });
-      
+
       labels = result.labelAnnotations || [];
     } else if (GOOGLE_VISION_API_KEY) {
       // Use REST API with API key
@@ -153,59 +165,59 @@ async function analyzeProductImage(imageUrl, searchTerm) {
         },
         { timeout: 15000 }
       );
-      
+
       labels = visionResponse.data.responses[0]?.labelAnnotations || [];
     }
-    
+
     const detectedLabels = labels.map(l => l.description.toLowerCase());
-    
+
     console.log(`Vision API labels for ${imageUrl.substring(0, 50)}:`, detectedLabels.slice(0, 5));
-    
+
     // Build expected labels from search term
     const searchWords = searchTerm.toLowerCase().split(' ').filter(w => w.length > 2);
-    
+
     // Define valid categories for blankets/textiles
     const validCategories = [
-      'blanket', 'throw', 'textile', 'bedding', 'fabric', 'fleece', 
+      'blanket', 'throw', 'textile', 'bedding', 'fabric', 'fleece',
       'sherpa', 'plush', 'soft', 'bed', 'home', 'linen', 'cotton',
       'polyester', 'material', 'furnishing', 'comfort'
     ];
-    
+
     // Invalid categories (things that are definitely NOT blankets)
     const invalidCategories = [
       'clothing', 'apparel', 'fashion', 'footwear', 'shoe', 'boot',
       'sneaker', 'watch', 'jewelry', 'accessory', 'toy', 'electronics',
       'gadget', 'tool', 'furniture', 'kitchen', 'appliance'
     ];
-    
+
     // Check for invalid categories first
-    const hasInvalidCategory = detectedLabels.some(label => 
+    const hasInvalidCategory = detectedLabels.some(label =>
       invalidCategories.some(invalid => label.includes(invalid))
     );
-    
+
     if (hasInvalidCategory) {
       console.log(`  ❌ Image rejected: contains invalid category`);
       return false;
     }
-    
+
     // Check if image contains valid textile/blanket-related labels
     const hasValidCategory = detectedLabels.some(label =>
       validCategories.some(valid => label.includes(valid))
     );
-    
+
     // Also check if any search term words appear in labels
     const hasSearchTermMatch = searchWords.some(word =>
       detectedLabels.some(label => label.includes(word))
     );
-    
+
     if (hasValidCategory || hasSearchTermMatch) {
       console.log(`  ✅ Image passed: valid category or search term match`);
       return true;
     }
-    
+
     console.log(`  ❌ Image rejected: no valid category match`);
     return false;
-    
+
   } catch (error) {
     console.error('Vision API error:', error.message);
     // On error, default to PASS (don't reject due to API issues)
@@ -219,46 +231,46 @@ async function analyzeProductImage(imageUrl, searchTerm) {
 app.post('/api/scrape', async (req, res) => {
   const requestId = Date.now().toString(36);
   console.log(`[${requestId}] POST /api/scrape`, req.body);
-  
+
   const { searchUrl, searchTerm, useImageDetection = true } = req.body;
-  
+
   if (!searchUrl && !searchTerm) {
     return res.status(400).json({ error: 'searchUrl or searchTerm required' });
   }
-  
+
   // Require CJ API token
   if (!CJ_API_TOKEN) {
-    return res.status(500).json({ 
-      error: 'CJ_API_TOKEN environment variable is required. Puppeteer scraping has been removed for better reliability.' 
+    return res.status(500).json({
+      error: 'CJ_API_TOKEN environment variable is required. Puppeteer scraping has been removed for better reliability.'
     });
   }
-  
+
   try {
     console.log('[API MODE] Using CJ Official API');
-    
+
     // Parse search term and filters from URL if provided
     let keyword = searchTerm || searchUrl;
     let filters = {};
-    
+
     if (searchUrl && searchUrl.includes('cjdropshipping.com')) {
       const parsed = parseCJUrl(searchUrl);
       keyword = parsed.keyword;
       filters = parsed.filters;
     }
-    
+
     const apiResult = await searchCJProducts(keyword, CJ_API_TOKEN, {
       pageNum: 1,
       pageSize: 100,
       verifiedWarehouse: filters.verifiedWarehouse
     });
-    
+
     if (!apiResult.success) {
       throw new Error(apiResult.error || 'CJ API request failed');
     }
-    
+
     // Apply text filtering
     const textFiltered = apiResult.products.filter(p => isRelevantProduct(p.title, keyword));
-    
+
     // Apply image detection if enabled
     let finalProducts = textFiltered;
     if (useImageDetection && textFiltered.length > 0) {
@@ -271,7 +283,7 @@ app.post('/api/scrape', async (req, res) => {
       }
       finalProducts = imageFiltered;
     }
-    
+
     const results = {
       success: true,
       method: 'CJ_API',
@@ -285,7 +297,7 @@ app.post('/api/scrape', async (req, res) => {
       products: finalProducts,
       imageDetectionUsed: useImageDetection
     };
-    
+
     res.json({ ...results, requestId });
   } catch (error) {
     console.error(`[${requestId}] Error:`, error);
