@@ -305,6 +305,113 @@ app.post('/api/scrape', async (req, res) => {
   }
 });
 
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    endpoints: ['/api/scrape', '/api/upload-shopify', '/health']
+  });
+});
+
+// Upload products to Shopify
+app.post('/api/upload-shopify', async (req, res) => {
+  const requestId = Date.now().toString(36);
+  console.log(`[${requestId}] POST /api/upload-shopify`);
+
+  const { products, markup = 250, shopifyStore, shopifyToken } = req.body;
+
+  if (!products || !Array.isArray(products) || products.length === 0) {
+    return res.status(400).json({ error: 'Products array is required', requestId });
+  }
+
+  if (!shopifyStore || !shopifyToken) {
+    return res.status(400).json({
+      error: 'Shopify credentials required. Configure your store in Settings.',
+      requestId
+    });
+  }
+
+  try {
+    const results = [];
+
+    // Upload products sequentially to avoid rate limits
+    for (const product of products) {
+      try {
+        // Parse price
+        const priceMatch = (product.price || '0').toString().match(/[\d.]+/);
+        const price = priceMatch ? parseFloat(priceMatch[0]) : 0;
+        const sellingPrice = price * (markup / 100);
+        const comparePrice = sellingPrice * 1.3;
+
+        // Create product via Shopify REST API
+        const productData = {
+          product: {
+            title: product.title || 'Untitled Product',
+            vendor: 'CJ Dropshipping',
+            product_type: 'Imported',
+            status: 'active', // Publish immediately
+            tags: ['dropship', 'cj', product.sourceKeyword || ''].filter(Boolean).join(', '),
+            variants: [{
+              price: sellingPrice.toFixed(2),
+              compare_at_price: comparePrice.toFixed(2),
+              inventory_management: null,
+              sku: product.sku || ''
+            }],
+            images: product.image ? [{ src: product.image }] : []
+          }
+        };
+
+        const response = await axios.post(
+          `https://${shopifyStore}/admin/api/2024-01/products.json`,
+          productData,
+          {
+            headers: {
+              'X-Shopify-Access-Token': shopifyToken,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+
+        results.push({
+          title: product.title,
+          success: true,
+          productId: response.data.product.id,
+          shopifyUrl: `https://${shopifyStore}/admin/products/${response.data.product.id}`
+        });
+
+        console.log(`[${requestId}] ✅ Uploaded: ${product.title}`);
+
+        // Delay to respect Shopify rate limits (2 calls/second)
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+      } catch (error) {
+        console.error(`[${requestId}] ❌ Failed: ${product.title}`, error.response?.data || error.message);
+        results.push({
+          title: product.title,
+          success: false,
+          error: error.response?.data?.errors || error.message
+        });
+      }
+    }
+
+    const successCount = results.filter(r => r.success).length;
+
+    res.json({
+      success: true,
+      requestId,
+      total: products.length,
+      uploaded: successCount,
+      failed: products.length - successCount,
+      results
+    });
+
+  } catch (error) {
+    console.error(`[${requestId}] Error:`, error);
+    res.status(500).json({ error: error.message, requestId });
+  }
+});
+
 // Serve React frontend
 app.use(express.static(path.join(__dirname, '../frontend/build')));
 app.get('*', (req, res) => {
