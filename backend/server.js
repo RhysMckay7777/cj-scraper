@@ -250,7 +250,23 @@ async function scrapeCJDropshipping(searchUrl, searchTerm = null, useImageDetect
       console.log(`Page ${currentPage}: ${url}`);
       
       await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-      await page.waitForSelector('[data-product-type]', { timeout: 10000 }).catch(() => {});
+      
+      // Wait for Vue.js to render products
+      console.log('Waiting for products to load...');
+      await page.waitForTimeout(3000); // Give Vue time to render
+      
+      // Scroll to trigger lazy loading
+      await page.evaluate(() => {
+        window.scrollTo(0, document.body.scrollHeight / 2);
+      });
+      await page.waitForTimeout(1000);
+      
+      // Wait for product elements
+      const productsFound = await page.waitForSelector('[data-product-type]', { timeout: 15000 })
+        .then(() => true)
+        .catch(() => false);
+      
+      console.log(`Products found on page: ${productsFound}`);
       
       if (currentPage === 1) {
         totalPages = await page.evaluate(() => {
@@ -273,6 +289,7 @@ async function scrapeCJDropshipping(searchUrl, searchTerm = null, useImageDetect
       const pageProducts = await page.evaluate(() => {
         const items = [];
         const productElements = document.querySelectorAll('[data-product-type]');
+        console.log(`[Puppeteer] Found ${productElements.length} product elements`);
         productElements.forEach(el => {
           try {
             const link = el.querySelector('a');
