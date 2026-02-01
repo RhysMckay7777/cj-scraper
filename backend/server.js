@@ -173,26 +173,76 @@ async function scrapeCJDropshipping(searchTerm, options = {}) {
   }
 }
 
+// Request logging middleware
+app.use((req, res, next) => {
+  const requestId = Date.now().toString(36) + Math.random().toString(36).substr(2);
+  req.requestId = requestId;
+
+  console.log('='.repeat(60));
+  console.log(`[${requestId}] ${req.method} ${req.url} at ${new Date().toISOString()}`);
+  console.log(`[${requestId}] Origin: ${req.headers.origin || 'none'}`);
+  console.log(`[${requestId}] Body:`, JSON.stringify(req.body, null, 2));
+  console.log('='.repeat(60));
+
+  next();
+});
+
 // API Routes
 app.post('/api/scrape', async (req, res) => {
   const { searchTerm, options } = req.body;
+  const requestId = req.requestId;
+
+  console.log(`[${requestId}] Processing scrape request for: "${searchTerm}"`);
 
   if (!searchTerm) {
-    return res.status(400).json({ error: 'searchTerm is required' });
+    console.error(`[${requestId}] ERROR: searchTerm is missing`);
+    return res.status(400).json({
+      error: 'searchTerm is required',
+      requestId
+    });
   }
 
   try {
+    const startTime = Date.now();
     const results = await scrapeCJDropshipping(searchTerm, options || {});
-    res.json(results);
+    const duration = Date.now() - startTime;
+
+    console.log(`[${requestId}] Scrape completed in ${duration}ms - Found ${results.filtered || 0} products`);
+
+    res.json({
+      ...results,
+      requestId,
+      processingTime: `${duration}ms`
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error(`[${requestId}] FATAL ERROR:`, error.message);
+    console.error(`[${requestId}] Stack:`, error.stack);
+    res.status(500).json({
+      error: error.message,
+      requestId
+    });
   }
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok' });
+  console.log('[Health] Health check requested');
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Catch-all for undefined routes (helps debug 404/405 errors)
+app.use((req, res) => {
+  console.error(`[404] Route not found: ${req.method} ${req.url}`);
+  res.status(404).json({
+    error: 'Route not found',
+    method: req.method,
+    path: req.url
+  });
 });
 
 app.listen(PORT, () => {
+  console.log('='.repeat(60));
   console.log(`CJ Scraper API running on port ${PORT}`);
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`Allowed origins: ${allowedOrigins.join(', ')}`);
+  console.log('='.repeat(60));
 });
