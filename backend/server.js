@@ -120,7 +120,7 @@ function parseCJUrl(url) {
   }
 }
 
-// Analyze image with Google Vision API
+// Analyze image with Google Vision API - DYNAMIC category detection
 async function analyzeProductImage(imageUrl, searchTerm) {
   try {
     if (!GOOGLE_VISION_API_KEY && !process.env.GOOGLE_APPLICATION_CREDENTIALS && !GOOGLE_CREDENTIALS_JSON) {
@@ -160,7 +160,7 @@ async function analyzeProductImage(imageUrl, searchTerm) {
         {
           requests: [{
             image: { content: base64Image },
-            features: [{ type: 'LABEL_DETECTION', maxResults: 10 }]
+            features: [{ type: 'LABEL_DETECTION', maxResults: 15 }]
           }]
         },
         { timeout: 15000 }
@@ -171,51 +171,109 @@ async function analyzeProductImage(imageUrl, searchTerm) {
 
     const detectedLabels = labels.map(l => l.description.toLowerCase());
 
-    console.log(`Vision API labels for ${imageUrl.substring(0, 50)}:`, detectedLabels.slice(0, 5));
+    console.log(`Vision API labels for ${imageUrl.substring(0, 50)}:`, detectedLabels.slice(0, 7));
 
-    // Build expected labels from search term
-    const searchWords = searchTerm.toLowerCase().split(' ').filter(w => w.length > 2);
+    // ===========================================
+    // DYNAMIC CATEGORY DETECTION
+    // ===========================================
+    // Build valid categories from the search term DYNAMICALLY
+    const searchLower = searchTerm.toLowerCase();
+    const searchWords = searchLower.split(/[\s+]+/).filter(w => w.length > 2);
 
-    // Define valid categories for blankets/textiles
-    const validCategories = [
-      'blanket', 'throw', 'textile', 'bedding', 'fabric', 'fleece',
-      'sherpa', 'plush', 'soft', 'bed', 'home', 'linen', 'cotton',
-      'polyester', 'material', 'furnishing', 'comfort'
-    ];
+    // Semantic keyword expansions - maps keywords to related valid labels
+    const keywordExpansions = {
+      // Home textiles
+      'blanket': ['blanket', 'throw', 'textile', 'fabric', 'fleece', 'bedding', 'wool', 'woolen', 'fur', 'velvet', 'flannel', 'plush', 'soft', 'warm', 'cozy', 'quilt', 'comforter', 'duvet', 'cover', 'material', 'natural material', 'knit', 'cotton', 'polyester', 'sherpa', 'coral'],
+      'throw': ['throw', 'blanket', 'textile', 'fabric', 'bedding', 'wool', 'fur', 'soft', 'cozy'],
+      'fleece': ['fleece', 'blanket', 'fabric', 'textile', 'soft', 'warm', 'wool', 'fur', 'material'],
+      'pillow': ['pillow', 'cushion', 'textile', 'fabric', 'bedding', 'soft', 'stuffing', 'comfort'],
+      'curtain': ['curtain', 'drape', 'textile', 'fabric', 'window', 'home', 'decor'],
+      'rug': ['rug', 'carpet', 'mat', 'floor', 'textile', 'fabric', 'home'],
 
-    // Invalid categories (things that are definitely NOT blankets)
-    const invalidCategories = [
-      'clothing', 'apparel', 'fashion', 'footwear', 'shoe', 'boot',
-      'sneaker', 'watch', 'jewelry', 'accessory', 'toy', 'electronics',
-      'gadget', 'tool', 'furniture', 'kitchen', 'appliance'
-    ];
+      // Electronics
+      'led': ['led', 'light', 'lamp', 'lighting', 'bulb', 'strip', 'glow', 'bright', 'electric', 'wire', 'cable'],
+      'light': ['light', 'lamp', 'led', 'lighting', 'bulb', 'glow', 'bright', 'illumination'],
+      'phone': ['phone', 'mobile', 'smartphone', 'device', 'electronic', 'gadget', 'screen', 'case', 'cover'],
+      'cable': ['cable', 'wire', 'cord', 'charger', 'usb', 'electric', 'connector'],
+      'speaker': ['speaker', 'audio', 'sound', 'music', 'bluetooth', 'electronic'],
 
-    // Check for invalid categories first
-    const hasInvalidCategory = detectedLabels.some(label =>
-      invalidCategories.some(invalid => label.includes(invalid))
+      // Kitchen
+      'kitchen': ['kitchen', 'cookware', 'utensil', 'cooking', 'food', 'baking', 'tool', 'appliance'],
+      'cup': ['cup', 'mug', 'drinkware', 'ceramic', 'glass', 'coffee', 'tea', 'beverage'],
+      'plate': ['plate', 'dish', 'dinnerware', 'ceramic', 'tableware', 'food'],
+
+      // Pets
+      'dog': ['dog', 'pet', 'animal', 'canine', 'puppy', 'collar', 'leash', 'toy'],
+      'cat': ['cat', 'pet', 'animal', 'feline', 'kitten', 'toy'],
+      'pet': ['pet', 'animal', 'dog', 'cat', 'toy', 'collar', 'leash', 'bowl'],
+
+      // Toys & Kids
+      'toy': ['toy', 'play', 'game', 'fun', 'child', 'kid', 'baby', 'stuffed', 'plush'],
+      'baby': ['baby', 'infant', 'child', 'kid', 'nursery', 'toddler'],
+
+      // Clothing (if user wants clothing)
+      'shirt': ['shirt', 'clothing', 'apparel', 'top', 'garment', 'textile', 'fabric', 'fashion'],
+      'dress': ['dress', 'clothing', 'apparel', 'garment', 'fashion', 'textile'],
+      'shoe': ['shoe', 'footwear', 'sneaker', 'boot', 'sandal', 'sole', 'leather'],
+
+      // Jewelry & Accessories
+      'jewelry': ['jewelry', 'jewellery', 'accessory', 'ring', 'necklace', 'bracelet', 'earring', 'gold', 'silver'],
+      'watch': ['watch', 'timepiece', 'wrist', 'clock', 'accessory', 'band', 'strap'],
+      'bag': ['bag', 'handbag', 'purse', 'backpack', 'luggage', 'pouch', 'case'],
+
+      // Beauty
+      'makeup': ['makeup', 'cosmetic', 'beauty', 'lipstick', 'brush', 'powder'],
+      'skincare': ['skincare', 'cream', 'lotion', 'beauty', 'face', 'skin'],
+
+      // Tools & Hardware
+      'tool': ['tool', 'hardware', 'drill', 'wrench', 'screwdriver', 'equipment'],
+
+      // Sports & Outdoor
+      'sport': ['sport', 'fitness', 'exercise', 'gym', 'athletic', 'outdoor'],
+      'camping': ['camping', 'outdoor', 'tent', 'hiking', 'adventure', 'nature']
+    };
+
+    // Build valid categories from search term
+    let validCategories = new Set();
+
+    // Add exact search words
+    searchWords.forEach(word => {
+      validCategories.add(word);
+
+      // Expand with related terms
+      if (keywordExpansions[word]) {
+        keywordExpansions[word].forEach(related => validCategories.add(related));
+      }
+
+      // Also check partial matches
+      Object.keys(keywordExpansions).forEach(key => {
+        if (word.includes(key) || key.includes(word)) {
+          keywordExpansions[key].forEach(related => validCategories.add(related));
+        }
+      });
+    });
+
+    const validCategoriesArray = Array.from(validCategories);
+    console.log(`  📋 Dynamic valid categories for "${searchTerm}":`, validCategoriesArray.slice(0, 10));
+
+    // Check if any detected label matches our dynamic valid categories
+    const hasValidMatch = detectedLabels.some(label =>
+      validCategoriesArray.some(valid =>
+        label.includes(valid) || valid.includes(label)
+      )
     );
 
-    if (hasInvalidCategory) {
-      console.log(`  ❌ Image rejected: contains invalid category`);
-      return false;
-    }
-
-    // Check if image contains valid textile/blanket-related labels
-    const hasValidCategory = detectedLabels.some(label =>
-      validCategories.some(valid => label.includes(valid))
-    );
-
-    // Also check if any search term words appear in labels
+    // Also check direct search term match in labels
     const hasSearchTermMatch = searchWords.some(word =>
-      detectedLabels.some(label => label.includes(word))
+      detectedLabels.some(label => label.includes(word) || word.includes(label))
     );
 
-    if (hasValidCategory || hasSearchTermMatch) {
-      console.log(`  ✅ Image passed: valid category or search term match`);
+    if (hasValidMatch || hasSearchTermMatch) {
+      console.log(`  ✅ Image PASSED: matches search category "${searchTerm}"`);
       return true;
     }
 
-    console.log(`  ❌ Image rejected: no valid category match`);
+    console.log(`  ❌ Image rejected: labels don't match "${searchTerm}" category`);
     return false;
 
   } catch (error) {
@@ -224,6 +282,7 @@ async function analyzeProductImage(imageUrl, searchTerm) {
     return true;
   }
 }
+
 
 // Removed Puppeteer scraping - using CJ API exclusively for better reliability and speed
 
