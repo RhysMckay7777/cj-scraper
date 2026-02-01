@@ -6,31 +6,28 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// CORS configuration for production
+// CORS configuration - Allow all origins for now (can be restricted later)
+// Add your Vercel frontend URLs here
 const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:5173',
-  process.env.FRONTEND_URL, // Set this in Render to your Vercel URL
+  'https://cj-scraper.vercel.app',  // Your Vercel frontend
+  process.env.FRONTEND_URL, // Additional URL from env var
 ].filter(Boolean);
 
-const corsOptions = {
-  origin: function (origin, callback) {
-    // Allow requests with no origin (mobile apps, curl, etc.)
-    if (!origin) return callback(null, true);
+console.log('Allowed CORS origins:', allowedOrigins);
 
-    if (allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
-      callback(null, true);
-    } else {
-      console.log('Blocked by CORS:', origin);
-      callback(null, true); // Allow all in case origin not in list (for flexibility)
-    }
-  },
-  credentials: true,
+// Use simple CORS that allows all origins (most reliable)
+app.use(cors({
+  origin: '*',  // Allow all origins
+  credentials: false,  // Must be false when origin is '*'
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-};
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+}));
 
-app.use(cors(corsOptions));
+// Handle preflight requests explicitly
+app.options('*', cors());
+
 app.use(express.json());
 
 // AI-powered product relevance checker
