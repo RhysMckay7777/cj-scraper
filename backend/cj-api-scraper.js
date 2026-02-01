@@ -66,27 +66,40 @@ async function searchCJProducts(searchTerm, cjToken, options = {}) {
     console.log(`[CJ API] Found ${totalCount} total products across ${totalPages} pages`);
     console.log(`[CJ API] Returned ${productList.length} products on page ${pageNum}`);
 
+    // Helper function to generate URL slug from product name
+    const generateSlug = (name) => {
+      return name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+    };
+
     // Transform CJ API response to our format
     // /product/list uses: productNameEn, productImage, pid, sellPrice
-    let products = productList.map(product => ({
-      title: product.productNameEn || product.productName || '',
-      price: `$${product.sellPrice || 0}`,
-      lists: product.listedNum || 0,
-      url: `https://www.cjdropshipping.com/product/${product.pid}.html`,
-      image: product.productImage || '',
-      sku: product.productSku || '',
-      pid: product.pid || '',
-      categoryId: product.categoryId || '',
-      variants: product.variants || []
-    }));
+    let products = productList.map(product => {
+      const productName = product.productNameEn || product.productName || '';
+      const slug = generateSlug(productName);
+      
+      return {
+        title: productName,
+        price: `$${product.sellPrice || 0}`,
+        lists: product.listedNum || 0,
+        url: `https://cjdropshipping.com/product/${slug}-p-${product.pid}.html`,
+        image: product.productImage || '',
+        sku: product.productSku || '',
+        pid: product.pid || '',
+        categoryId: product.categoryId || '',
+        variants: product.variants || []
+      };
+    });
 
     // NEW: Fetch all pages if requested
     if (fetchAllPages && totalPages > 1) {
       console.log(`[CJ API] Fetching remaining ${totalPages - 1} pages...`);
       
       for (let page = 2; page <= totalPages; page++) {
-        // Add delay to avoid rate limiting
-        await new Promise(resolve => setTimeout(resolve, 500));
+        // Add delay to avoid rate limiting (CJ API limit: 1 request per second)
+        await new Promise(resolve => setTimeout(resolve, 1100));
         
         const nextPageResult = await searchCJProducts(searchTerm, cjToken, {
           ...options,
