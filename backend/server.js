@@ -539,6 +539,113 @@ app.post('/api/sourcing/query', async (req, res) => {
 });
 
 // ============================================
+// 15. UPLOAD TO SHOPIFY - POST /api/upload-shopify
+// Creates products on Shopify using Admin API
+// ============================================
+app.post('/api/upload-shopify', async (req, res) => {
+  const { products, shopifyStore, shopifyToken, markup = 250 } = req.body;
+
+  console.log(`[Shopify Upload] Request to upload ${products?.length} products to ${shopifyStore}`);
+
+  if (!products || !Array.isArray(products) || products.length === 0) {
+    return res.status(400).json({ success: false, error: 'products array is required' });
+  }
+
+  if (!shopifyStore || !shopifyToken) {
+    return res.status(400).json({ success: false, error: 'shopifyStore and shopifyToken are required' });
+  }
+
+  try {
+    let uploaded = 0;
+    let failed = 0;
+    const errors = [];
+
+    // Process each product
+    for (const product of products) {
+      try {
+        // Calculate markup price (e.g., 250% markup means multiply by 2.5)
+        const costPrice = parseFloat(product.price) || 0;
+        const sellPrice = (costPrice * (markup / 100)).toFixed(2);
+        const compareAtPrice = (costPrice * ((markup + 50) / 100)).toFixed(2); // Higher compare price for "sale" look
+
+        // Create product on Shopify
+        const shopifyProduct = {
+          product: {
+            title: product.title,
+            body_html: `<p>High-quality product sourced from verified suppliers.</p>
+                        <p>SKU: ${product.sku || 'N/A'}</p>
+                        <p>Category: ${product.categoryName || 'General'}</p>`,
+            vendor: product.supplierName || 'CJ Dropshipping',
+            product_type: product.categoryName || 'General',
+            status: 'draft', // Create as draft first
+            variants: [
+              {
+                price: sellPrice,
+                compare_at_price: compareAtPrice,
+                sku: product.sku,
+                inventory_management: 'shopify',
+                inventory_policy: 'deny',
+                requires_shipping: true,
+                weight: product.weight || 0,
+                weight_unit: 'g',
+              }
+            ],
+            images: product.image ? [{ src: product.image }] : [],
+            tags: [
+              product.sourceKeyword || '',
+              product.categoryName || '',
+              product.freeShipping ? 'Free Shipping' : '',
+              'CJ Dropshipping'
+            ].filter(Boolean).join(', '),
+          }
+        };
+
+        // Make request to Shopify Admin API
+        const shopifyResponse = await axios.post(
+          `https://${shopifyStore}/admin/api/2024-01/products.json`,
+          shopifyProduct,
+          {
+            headers: {
+              'X-Shopify-Access-Token': shopifyToken,
+              'Content-Type': 'application/json',
+            },
+            timeout: 30000
+          }
+        );
+
+        if (shopifyResponse.data?.product?.id) {
+          uploaded++;
+          console.log(`[Shopify] Created product: ${product.title} (ID: ${shopifyResponse.data.product.id})`);
+        }
+
+        // Small delay to avoid rate limits
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+      } catch (productError) {
+        failed++;
+        const errorMsg = productError.response?.data?.errors || productError.message;
+        console.error(`[Shopify] Failed to create "${product.title}":`, errorMsg);
+        errors.push({ title: product.title, error: errorMsg });
+      }
+    }
+
+    console.log(`[Shopify Upload] Complete: ${uploaded} uploaded, ${failed} failed`);
+
+    res.json({
+      success: true,
+      uploaded,
+      failed,
+      total: products.length,
+      errors: errors.slice(0, 5) // Return first 5 errors only
+    });
+
+  } catch (error) {
+    console.error('[Shopify Upload] Error:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ============================================
 // 404 handler
 // ============================================
 app.use((req, res) => {

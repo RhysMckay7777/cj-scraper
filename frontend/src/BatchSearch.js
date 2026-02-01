@@ -184,7 +184,7 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
     setError(null);
 
     try {
-      const response = await axios.post('/api/upload-shopify', {
+      const response = await axios.post(`${API_URL}/api/upload-shopify`, {
         products: allProducts,
         shopifyStore,
         shopifyToken,
