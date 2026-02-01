@@ -1,16 +1,13 @@
 const express = require('express');
 const path = require('path');
 const puppeteer = require('puppeteer');
-const vision = require('@google-cloud/vision');
 const axios = require('axios');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// Initialize Google Vision API client
-const visionClient = new vision.ImageAnnotatorClient({
-  keyFilename: process.env.GOOGLE_APPLICATION_CREDENTIALS || './google-vision-key.json'
-});
+// Google Vision API Key (simpler than service account)
+const GOOGLE_VISION_API_KEY = process.env.GOOGLE_VISION_API_KEY || '';
 
 // Middleware
 app.use(express.json());
@@ -86,7 +83,12 @@ function parseCJUrl(url) {
 // Analyze image with Google Vision API
 async function analyzeProductImage(imageUrl, searchTerm) {
   try {
-    // Download image first (Vision API needs the image data or public URL)
+    if (!GOOGLE_VISION_API_KEY) {
+      console.log('  ⚠️  Vision API key not configured - skipping image detection');
+      return true; // Default pass if no API key
+    }
+    
+    // Download image first
     const response = await axios.get(imageUrl, { 
       responseType: 'arraybuffer',
       timeout: 10000,
@@ -96,13 +98,21 @@ async function analyzeProductImage(imageUrl, searchTerm) {
     });
     
     const imageBuffer = Buffer.from(response.data);
+    const base64Image = imageBuffer.toString('base64');
     
-    // Call Vision API for label detection
-    const [result] = await visionClient.labelDetection({
-      image: { content: imageBuffer }
-    });
+    // Call Vision API REST endpoint
+    const visionResponse = await axios.post(
+      `https://vision.googleapis.com/v1/images:annotate?key=${GOOGLE_VISION_API_KEY}`,
+      {
+        requests: [{
+          image: { content: base64Image },
+          features: [{ type: 'LABEL_DETECTION', maxResults: 10 }]
+        }]
+      },
+      { timeout: 15000 }
+    );
     
-    const labels = result.labelAnnotations || [];
+    const labels = visionResponse.data.responses[0]?.labelAnnotations || [];
     const detectedLabels = labels.map(l => l.description.toLowerCase());
     
     console.log(`Vision API labels for ${imageUrl.substring(0, 50)}:`, detectedLabels.slice(0, 5));
