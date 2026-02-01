@@ -253,16 +253,24 @@ async function scrapeCJDropshipping(searchUrl, searchTerm = null, useImageDetect
       
       // Wait for Vue.js to render products
       console.log('Waiting for products to load...');
-      await page.waitForTimeout(3000); // Give Vue time to render
+      await page.waitForTimeout(5000); // Give Vue more time to render and populate data
       
       // Scroll to trigger lazy loading
       await page.evaluate(() => {
         window.scrollTo(0, document.body.scrollHeight / 2);
       });
-      await page.waitForTimeout(1000);
+      await page.waitForTimeout(2000);
       
-      // Wait for product elements
-      const productsFound = await page.waitForSelector('[data-product-type]', { timeout: 15000 })
+      // Wait for product elements (search results use .product-row with data-product-id)
+      // Also wait for actual content to be rendered (product-title with text)
+      const productsFound = await page.waitForFunction(() => {
+        const rows = document.querySelectorAll('.product-row[data-product-id]');
+        const hasContent = Array.from(rows).some(row => {
+          const title = row.querySelector('.product-title');
+          return title && title.textContent.trim().length > 0;
+        });
+        return rows.length > 0 && hasContent;
+      }, { timeout: 20000 })
         .then(() => true)
         .catch(() => false);
       
@@ -288,7 +296,8 @@ async function scrapeCJDropshipping(searchUrl, searchTerm = null, useImageDetect
       
       const pageProducts = await page.evaluate(() => {
         const items = [];
-        const productElements = document.querySelectorAll('[data-product-type]');
+        // Use .product-row with data-product-id (search results) instead of data-product-type (local products only)
+        const productElements = document.querySelectorAll('.product-row[data-product-id]');
         console.log(`[Puppeteer] Found ${productElements.length} product elements`);
         productElements.forEach(el => {
           try {
