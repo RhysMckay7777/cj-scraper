@@ -37,33 +37,43 @@ async function searchCJProducts(searchTerm, cjToken, options = {}) {
       timeout: 30000
     });
 
+    // Log full response for debugging
+    console.log('[CJ API] Response code:', response.data.code);
+    console.log('[CJ API] Response message:', response.data.message);
+    console.log('[CJ API] Response data keys:', Object.keys(response.data.data || {}));
+    console.log('[CJ API] Full response data:', JSON.stringify(response.data.data, null, 2).substring(0, 500));
+
     if (response.data.code !== 200) {
       throw new Error(`CJ API Error: ${response.data.message || 'Unknown error'}`);
     }
 
     const data = response.data.data;
 
-    console.log(`[CJ API] Found ${data.total} total products`);
-    console.log(`[CJ API] Returned ${data.list?.length || 0} products on this page`);
+    // Handle different response structures - listV2 might use 'result' instead of 'list'
+    const productList = data.list || data.result || data.products || [];
+    const totalCount = data.total || data.totalCount || productList.length;
+
+    console.log(`[CJ API] Found ${totalCount} total products`);
+    console.log(`[CJ API] Returned ${productList.length} products on this page`);
 
     // Transform CJ API response to our format
-    const products = (data.list || []).map(product => ({
-      title: product.productNameEn || '',
-      price: `$${product.sellPrice || 0}`,
-      lists: 0, // CJ API doesn't provide this
-      url: `https://www.cjdropshipping.com/product/${product.pid}.html`,
-      image: product.productImage || '',
-      sku: product.productSku || '',
-      pid: product.pid || '',
+    const products = productList.map(product => ({
+      title: product.productNameEn || product.productName || '',
+      price: `$${product.sellPrice || product.price || 0}`,
+      lists: 0,
+      url: `https://www.cjdropshipping.com/product/${product.pid || product.productId}.html`,
+      image: product.productImage || product.image || '',
+      sku: product.productSku || product.sku || '',
+      pid: product.pid || product.productId || '',
       variants: product.variants || []
     }));
 
     return {
       success: true,
       products: products,
-      totalProducts: data.total || 0,
+      totalProducts: totalCount,
       currentPage: pageNum,
-      totalPages: Math.ceil((data.total || 0) / pageSize)
+      totalPages: Math.ceil(totalCount / pageSize)
     };
 
   } catch (error) {
