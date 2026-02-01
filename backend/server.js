@@ -236,9 +236,9 @@ app.post('/api/scrape', async (req, res) => {
       hasMore = products.length === pageSize && allProducts.length < totalAvailable;
       currentPage++;
 
-      // Small delay to avoid rate limiting
+      // Small delay to avoid rate limiting (CJ allows ~1 req/sec)
       if (hasMore && currentPage <= maxPages) {
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await new Promise(resolve => setTimeout(resolve, 1200));
       }
     }
 
