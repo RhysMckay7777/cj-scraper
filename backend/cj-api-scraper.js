@@ -49,22 +49,34 @@ async function searchCJProducts(searchTerm, cjToken, options = {}) {
 
     const data = response.data.data;
 
-    // Handle different response structures - listV2 might use 'result' instead of 'list'
-    const productList = data.list || data.result || data.products || [];
-    const totalCount = data.total || data.totalCount || productList.length;
+    // Handle listV2 response structure: content[].productList[]
+    let productList = [];
+    if (data.content && Array.isArray(data.content)) {
+      // Flatten all productList arrays from content
+      data.content.forEach(item => {
+        if (item.productList && Array.isArray(item.productList)) {
+          productList = productList.concat(item.productList);
+        }
+      });
+    } else if (data.list) {
+      productList = data.list;
+    }
+
+    const totalCount = data.totalRecords || data.total || productList.length;
 
     console.log(`[CJ API] Found ${totalCount} total products`);
     console.log(`[CJ API] Returned ${productList.length} products on this page`);
 
     // Transform CJ API response to our format
+    // listV2 uses: nameEn, bigImage, id instead of productNameEn, productImage, pid
     const products = productList.map(product => ({
-      title: product.productNameEn || product.productName || '',
+      title: product.nameEn || product.productNameEn || product.productName || '',
       price: `$${product.sellPrice || product.price || 0}`,
-      lists: 0,
-      url: `https://www.cjdropshipping.com/product/${product.pid || product.productId}.html`,
-      image: product.productImage || product.image || '',
-      sku: product.productSku || product.sku || '',
-      pid: product.pid || product.productId || '',
+      lists: product.listedNum || 0,
+      url: `https://www.cjdropshipping.com/product/${product.id || product.pid}.html`,
+      image: product.bigImage || product.productImage || product.image || '',
+      sku: product.sku || product.productSku || '',
+      pid: product.id || product.pid || '',
       variants: product.variants || []
     }));
 
@@ -73,7 +85,7 @@ async function searchCJProducts(searchTerm, cjToken, options = {}) {
       products: products,
       totalProducts: totalCount,
       currentPage: pageNum,
-      totalPages: Math.ceil(totalCount / pageSize)
+      totalPages: data.totalPages || Math.ceil(totalCount / pageSize)
     };
 
   } catch (error) {
