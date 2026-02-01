@@ -18,13 +18,18 @@ async function searchCJProducts(searchTerm, cjToken, options = {}) {
 
     console.log(`[CJ API] Searching for: "${searchTerm}" (page ${pageNum})`);
 
-    const response = await axios.post(`${CJ_API_BASE}/product/list`, {
-      categoryId: '',
+    // Build query parameters for GET request
+    const params = new URLSearchParams({
       productNameEn: searchTerm,
-      pageNum: pageNum,
-      pageSize: pageSize,
-      ...(verifiedWarehouse ? { verifiedWarehouse: parseInt(verifiedWarehouse) } : {})
-    }, {
+      pageNum: pageNum.toString(),
+      pageSize: pageSize.toString()
+    });
+
+    if (verifiedWarehouse) {
+      params.append('verifiedWarehouse', verifiedWarehouse.toString());
+    }
+
+    const response = await axios.get(`${CJ_API_BASE}/product/listV2?${params.toString()}`, {
       headers: {
         'CJ-Access-Token': cjToken,
         'Content-Type': 'application/json'
@@ -37,7 +42,7 @@ async function searchCJProducts(searchTerm, cjToken, options = {}) {
     }
 
     const data = response.data.data;
-    
+
     console.log(`[CJ API] Found ${data.total} total products`);
     console.log(`[CJ API] Returned ${data.list?.length || 0} products on this page`);
 
@@ -63,7 +68,7 @@ async function searchCJProducts(searchTerm, cjToken, options = {}) {
 
   } catch (error) {
     console.error('[CJ API] Error:', error.message);
-    
+
     if (error.response) {
       console.error('[CJ API] Response:', error.response.data);
     }
