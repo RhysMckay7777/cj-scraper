@@ -28,9 +28,8 @@ ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
 # Set working directory
 WORKDIR /app
 
-# Copy package files
-COPY backend/package*.json ./backend/
-COPY frontend/package*.json ./frontend/
+# Copy all application code first
+COPY . .
 
 # Install backend dependencies
 WORKDIR /app/backend
@@ -41,9 +40,8 @@ WORKDIR /app/frontend
 RUN npm install
 RUN npm run build
 
-# Copy application code
+# Back to root
 WORKDIR /app
-COPY . .
 
 # Expose port
 ENV PORT=8080
