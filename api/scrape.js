@@ -1,5 +1,5 @@
-// Vercel Serverless Function for CJ Scraping
-// Fixed: URL parsing + Strict relevance filter (v1.3)
+// Vercel Serverless Function for CJ Scraping  
+// Fixed: URL parsing + Strict relevance filter (v1.3 - deployed)
 const puppeteer = require('puppeteer-core');
 const chrome = require('@sparticuz/chromium');
 
