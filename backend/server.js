@@ -61,7 +61,8 @@ app.use((req, res, next) => {
   next();
 });
 
-// RELAXED product relevance checker - now lets CJ API + categoryId do the heavy lifting
+// VERY RELAXED text filter - let image detection do the heavy lifting
+// Just need AT LEAST ONE search word to match - Vision API will filter out bad matches
 function isRelevantProduct(productTitle, searchTerm) {
   const lowerTitle = productTitle.toLowerCase();
   const lowerSearch = searchTerm.toLowerCase();
@@ -69,14 +70,12 @@ function isRelevantProduct(productTitle, searchTerm) {
   // Extract main keywords (words > 2 chars)
   const searchWords = lowerSearch.split(' ').filter(w => w.length > 2);
 
-  // RELAXED: At least HALF of the search words should be present (not ALL)
+  // VERY RELAXED: At least ONE search word should be present
+  // Image detection will catch false positives
   const matchingWords = searchWords.filter(word => lowerTitle.includes(word));
-  const matchRatio = matchingWords.length / searchWords.length;
 
-  if (matchRatio < 0.5) {
-    return false;
-  }
-  return true;
+  // Pass if any word matches
+  return matchingWords.length >= 1;
 }
 
 // Parse CJ URL
