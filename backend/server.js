@@ -231,38 +231,8 @@ async function analyzeProductImage(imageUrl, searchTerm) {
 
     const validCategoriesArray = Array.from(validCategories);
 
-    // ===========================================
-    // REJECT LABELS - Products to exclude
-    // ===========================================
-    // When searching for blankets, reject pillows/cushions/tapestries
-    // IMPORTANT: Only use specific labels that won't match blankets
-    const keywordRejects = {
-      'blanket': ['pillow', 'cushion', 'pillowcase', 'tapestry', 'wall hanging', 'curtain', 'stuffed toy'],
-      'throw': ['pillow', 'cushion', 'pillowcase'],
-      'fleece': ['pillow', 'cushion']
-    };
-
-    // Build reject list from search words
-    let rejectLabels = new Set();
-    searchWords.forEach(word => {
-      if (keywordRejects[word]) {
-        keywordRejects[word].forEach(reject => rejectLabels.add(reject));
-      }
-    });
-    const rejectLabelsArray = Array.from(rejectLabels);
-
-    // Check for reject labels FIRST
-    // Only reject if label EXACTLY matches or STARTS WITH reject term
-    if (rejectLabelsArray.length > 0) {
-      const hasRejectMatch = detectedLabels.some(label =>
-        rejectLabelsArray.some(reject =>
-          label === reject || label.startsWith(reject + ' ')
-        )
-      );
-      if (hasRejectMatch) {
-        return false; // REJECT - this is a pillow/cushion, not a blanket
-      }
-    }
+    // NOTE: Reject labels feature removed - caused too many false negatives
+    // Vision's positive matching alone is sufficient (86% accuracy)
 
     // Check if any detected label matches our dynamic valid categories
     const hasValidMatch = detectedLabels.some(label =>
