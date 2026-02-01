@@ -540,7 +540,7 @@ app.post('/api/sourcing/query', async (req, res) => {
 
 // ============================================
 // 15. UPLOAD TO SHOPIFY - POST /api/upload-shopify
-// Creates products on Shopify using Admin API
+// Creates products using Shopify GraphQL Admin API
 // ============================================
 app.post('/api/upload-shopify', async (req, res) => {
   const { products, shopifyStore, shopifyToken, markup = 250 } = req.body;
@@ -560,50 +560,75 @@ app.post('/api/upload-shopify', async (req, res) => {
     let failed = 0;
     const errors = [];
 
+    // GraphQL mutation for creating products
+    const productCreateMutation = `
+      mutation productCreate($input: ProductInput!, $media: [CreateMediaInput!]) {
+        productCreate(input: $input, media: $media) {
+          product {
+            id
+            title
+            handle
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `;
+
     // Process each product
     for (const product of products) {
       try {
-        // Calculate markup price (e.g., 250% markup means multiply by 2.5)
+        // Calculate markup price
         const costPrice = parseFloat(product.price) || 0;
         const sellPrice = (costPrice * (markup / 100)).toFixed(2);
-        const compareAtPrice = (costPrice * ((markup + 50) / 100)).toFixed(2); // Higher compare price for "sale" look
+        const compareAtPrice = (costPrice * ((markup + 50) / 100)).toFixed(2);
 
-        // Create product on Shopify
-        const shopifyProduct = {
-          product: {
+        // Build GraphQL variables
+        const variables = {
+          input: {
             title: product.title,
-            body_html: `<p>High-quality product sourced from verified suppliers.</p>
-                        <p>SKU: ${product.sku || 'N/A'}</p>
-                        <p>Category: ${product.categoryName || 'General'}</p>`,
+            descriptionHtml: `<p>High-quality product sourced from verified suppliers.</p>
+                              <p><strong>SKU:</strong> ${product.sku || 'N/A'}</p>
+                              <p><strong>Category:</strong> ${product.categoryName || 'General'}</p>`,
             vendor: product.supplierName || 'CJ Dropshipping',
-            product_type: product.categoryName || 'General',
-            status: 'draft', // Create as draft first
-            variants: [
-              {
-                price: sellPrice,
-                compare_at_price: compareAtPrice,
-                sku: product.sku,
-                inventory_management: 'shopify',
-                inventory_policy: 'deny',
-                requires_shipping: true,
-                weight: product.weight || 0,
-                weight_unit: 'g',
-              }
-            ],
-            images: product.image ? [{ src: product.image }] : [],
+            productType: product.categoryName || 'General',
+            status: 'DRAFT',
             tags: [
               product.sourceKeyword || '',
               product.categoryName || '',
               product.freeShipping ? 'Free Shipping' : '',
               'CJ Dropshipping'
-            ].filter(Boolean).join(', '),
-          }
+            ].filter(Boolean),
+            variants: [
+              {
+                price: sellPrice,
+                compareAtPrice: compareAtPrice,
+                sku: product.sku || '',
+                inventoryManagement: 'SHOPIFY',
+                inventoryPolicy: 'DENY',
+                requiresShipping: true,
+                weight: product.weight || 0,
+                weightUnit: 'GRAMS',
+              }
+            ],
+          },
+          media: product.image ? [
+            {
+              originalSource: product.image,
+              mediaContentType: 'IMAGE',
+            }
+          ] : []
         };
 
-        // Make request to Shopify Admin API
+        // Make GraphQL request to Shopify
         const shopifyResponse = await axios.post(
-          `https://${shopifyStore}/admin/api/2024-01/products.json`,
-          shopifyProduct,
+          `https://${shopifyStore}/admin/api/2024-01/graphql.json`,
+          {
+            query: productCreateMutation,
+            variables: variables
+          },
           {
             headers: {
               'X-Shopify-Access-Token': shopifyToken,
@@ -613,19 +638,26 @@ app.post('/api/upload-shopify', async (req, res) => {
           }
         );
 
-        if (shopifyResponse.data?.product?.id) {
+        const result = shopifyResponse.data?.data?.productCreate;
+
+        if (result?.product?.id) {
           uploaded++;
-          console.log(`[Shopify] Created product: ${product.title} (ID: ${shopifyResponse.data.product.id})`);
+          console.log(`[Shopify] Created: ${product.title} (${result.product.id})`);
+        } else if (result?.userErrors?.length > 0) {
+          failed++;
+          const errorMsg = result.userErrors.map(e => e.message).join(', ');
+          console.error(`[Shopify] Failed "${product.title}":`, errorMsg);
+          errors.push({ title: product.title, error: errorMsg });
         }
 
-        // Small delay to avoid rate limits
+        // Delay to avoid rate limits
         await new Promise(resolve => setTimeout(resolve, 500));
 
       } catch (productError) {
         failed++;
         const errorMsg = productError.response?.data?.errors || productError.message;
-        console.error(`[Shopify] Failed to create "${product.title}":`, errorMsg);
-        errors.push({ title: product.title, error: errorMsg });
+        console.error(`[Shopify] Error "${product.title}":`, errorMsg);
+        errors.push({ title: product.title, error: JSON.stringify(errorMsg) });
       }
     }
 
@@ -636,7 +668,7 @@ app.post('/api/upload-shopify', async (req, res) => {
       uploaded,
       failed,
       total: products.length,
-      errors: errors.slice(0, 5) // Return first 5 errors only
+      errors: errors.slice(0, 5)
     });
 
   } catch (error) {
