@@ -169,7 +169,7 @@ app.post('/api/scrape', async (req, res) => {
   try {
     const startTime = Date.now();
     const pageSize = Math.min(options.pageSize || 200, 200); // Max 200 per page
-    const maxPages = options.maxPages || 5; // Default: fetch up to 5 pages (1000 products)
+    const maxPages = options.maxPages || 50; // Default: fetch ALL pages (up to 10,000 products)
 
     let allProducts = [];
     let currentPage = 1;
