@@ -253,26 +253,32 @@ async function scrapeCJDropshipping(searchUrl, searchTerm = null, useImageDetect
       
       // Wait for Vue.js to render products
       console.log('Waiting for products to load...');
-      await page.waitForTimeout(5000); // Give Vue more time to render and populate data
       
-      // Scroll to trigger lazy loading
-      await page.evaluate(() => {
-        window.scrollTo(0, document.body.scrollHeight / 2);
-      });
-      await page.waitForTimeout(2000);
-      
-      // Wait for product elements (search results use .product-row with data-product-id)
-      // Also wait for actual content to be rendered (product-title with text)
+      // Wait for product grid to appear and be populated
+      // CJ uses Vue.js which loads data via API after page load
       const productsFound = await page.waitForFunction(() => {
-        const rows = document.querySelectorAll('.product-row[data-product-id]');
-        const hasContent = Array.from(rows).some(row => {
-          const title = row.querySelector('.product-title');
-          return title && title.textContent.trim().length > 0;
-        });
-        return rows.length > 0 && hasContent;
-      }, { timeout: 20000 })
+        // Check for product rows
+        const rows = document.querySelectorAll('.product-row');
+        if (rows.length === 0) return false;
+        
+        // Check if any row has actual product data (title with text, not Vue template)
+        for (let row of rows) {
+          const titleEl = row.querySelector('.product-title h4, .product-title h3, .product-title');
+          if (titleEl) {
+            const text = titleEl.textContent?.trim() || '';
+            // Ignore Vue templates like ${product.nameEn}
+            if (text.length > 5 && !text.includes('${')) {
+              return true;
+            }
+          }
+        }
+        return false;
+      }, { timeout: 30000 })
         .then(() => true)
-        .catch(() => false);
+        .catch((err) => {
+          console.error('Timeout waiting for products:', err.message);
+          return false;
+        });
       
       console.log(`Products found on page: ${productsFound}`);
       
@@ -296,30 +302,49 @@ async function scrapeCJDropshipping(searchUrl, searchTerm = null, useImageDetect
       
       const pageProducts = await page.evaluate(() => {
         const items = [];
-        // Use .product-row with data-product-id (search results) instead of data-product-type (local products only)
-        const productElements = document.querySelectorAll('.product-row[data-product-id]');
+        // Use .product-row (works for both search and local products)
+        const productElements = document.querySelectorAll('.product-row');
         console.log(`[Puppeteer] Found ${productElements.length} product elements`);
+        
         productElements.forEach(el => {
           try {
-            const link = el.querySelector('a');
-            const title = el.querySelector('[class*="title"]')?.textContent?.trim() || 
-                         link?.textContent?.trim()?.split('\n')[0] || '';
+            // Multiple ways to find title (CJ uses different structures)
+            let title = el.querySelector('.product-title h4')?.textContent?.trim() ||
+                       el.querySelector('.product-title h3')?.textContent?.trim() ||
+                       el.querySelector('.product-title')?.textContent?.trim() ||
+                       el.querySelector('[class*="title"]')?.textContent?.trim() || '';
+            
+            // Skip Vue templates and empty titles
+            if (!title || title.includes('${') || title.length < 5) {
+              return;
+            }
+            
+            // Find link
+            const link = el.querySelector('a[href*="/product/"]') || el.querySelector('a');
+            const href = link?.getAttribute('href') || '';
+            
+            if (!href || !href.includes('/product/')) {
+              return;
+            }
+            
+            // Price
             const priceEl = el.querySelector('[class*="price"]');
             const price = priceEl?.textContent?.trim() || '';
-            const href = link?.getAttribute('href') || '';
+            
+            // Lists
             const lists = el.textContent.match(/Lists?:\s*(\d+)/i)?.[1] || '0';
+            
+            // Image
             const img = el.querySelector('img');
             const imageUrl = img?.getAttribute('src') || img?.getAttribute('data-src') || '';
             
-            if (title && href) {
-              items.push({
-                title,
-                price,
-                lists: parseInt(lists),
-                url: href.startsWith('http') ? href : `https://www.cjdropshipping.com${href}`,
-                image: imageUrl
-              });
-            }
+            items.push({
+              title,
+              price,
+              lists: parseInt(lists),
+              url: href.startsWith('http') ? href : `https://www.cjdropshipping.com${href}`,
+              image: imageUrl
+            });
           } catch (err) {
             console.error('Parse error:', err);
           }
