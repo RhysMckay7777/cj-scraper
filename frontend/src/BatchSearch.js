@@ -3,7 +3,11 @@ import axios from 'axios';
 import './BatchSearch.css';
 
 // API URL - uses env var in production, proxy in development
-const API_URL = process.env.REACT_APP_API_URL || '';
+// Ensure the URL has a protocol (https://) to avoid relative path issues
+const rawApiUrl = process.env.REACT_APP_API_URL || '';
+const API_URL = rawApiUrl && !rawApiUrl.startsWith('http')
+  ? `https://${rawApiUrl}`
+  : rawApiUrl;
 
 function BatchSearch({ shopifyStore, shopifyToken }) {
   const [searches, setSearches] = useState([
