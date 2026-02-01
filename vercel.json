@@ -2,6 +2,10 @@
   "version": 2,
   "builds": [
     {
+      "src": "api/**/*.js",
+      "use": "@vercel/node"
+    },
+    {
       "src": "frontend/package.json",
       "use": "@vercel/static-build",
       "config": {
@@ -12,10 +16,20 @@
   "routes": [
     {
       "src": "/api/scrape",
+      "methods": [
+        "GET",
+        "POST",
+        "OPTIONS"
+      ],
       "dest": "/api/scrape.js"
     },
     {
       "src": "/api/upload-shopify",
+      "methods": [
+        "GET",
+        "POST",
+        "OPTIONS"
+      ],
       "dest": "/api/upload-shopify.js"
     },
     {

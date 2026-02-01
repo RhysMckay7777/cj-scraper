@@ -3,12 +3,12 @@ const axios = require('axios');
 
 async function uploadProductToShopify(product, markup, shopifyConfig) {
   const { store, token } = shopifyConfig;
-  
+
   // Parse price
   const priceMatch = product.price.match(/[\d.]+/);
   const price = priceMatch ? parseFloat(priceMatch[0]) : 0;
   const sellingPrice = price * (1 + markup / 100);
-  
+
   const productData = {
     product: {
       title: product.title,
@@ -52,17 +52,37 @@ async function uploadProductToShopify(product, markup, shopifyConfig) {
 
 // Vercel handler
 module.exports = async (req, res) => {
+  // ============================================
+  // COMPREHENSIVE LOGGING FOR DEBUG
+  // ============================================
+  const requestId = Date.now().toString(36) + Math.random().toString(36).substr(2);
+
+  console.log('='.repeat(60));
+  console.log(`[${requestId}] SHOPIFY UPLOAD REQUEST AT ${new Date().toISOString()}`);
+  console.log(`[${requestId}] Method: ${req.method}`);
+  console.log(`[${requestId}] URL: ${req.url}`);
+  console.log(`[${requestId}] Headers:`, JSON.stringify(req.headers, null, 2));
+  console.log(`[${requestId}] Body keys:`, Object.keys(req.body || {}));
+  console.log(`[${requestId}] Product count:`, req.body?.products?.length || 0);
+  console.log('='.repeat(60));
+
   // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  
+
   if (req.method === 'OPTIONS') {
+    console.log(`[${requestId}] Handling OPTIONS preflight`);
     return res.status(200).end();
   }
-  
+
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
+    console.error(`[${requestId}] ERROR: Method ${req.method} not allowed`);
+    return res.status(405).json({
+      error: 'Method not allowed',
+      receivedMethod: req.method,
+      requestId
+    });
   }
 
   const { products, markup = 250, shopifyStore, shopifyToken } = req.body;
@@ -72,7 +92,7 @@ module.exports = async (req, res) => {
   }
 
   if (!shopifyStore || !shopifyToken) {
-    return res.status(400).json({ 
+    return res.status(400).json({
       error: 'Shopify credentials required',
       instructions: 'Configure your store in Settings'
     });
@@ -80,7 +100,7 @@ module.exports = async (req, res) => {
 
   try {
     const results = [];
-    
+
     // Upload products sequentially to avoid rate limits
     for (const product of products) {
       try {
@@ -88,7 +108,7 @@ module.exports = async (req, res) => {
           store: shopifyStore,
           token: shopifyToken
         });
-        
+
         results.push({
           title: product.title,
           ...result
@@ -116,7 +136,7 @@ module.exports = async (req, res) => {
     });
 
   } catch (error) {
-    res.status(500).json({ 
+    res.status(500).json({
       error: error.message || 'Upload failed'
     });
   }

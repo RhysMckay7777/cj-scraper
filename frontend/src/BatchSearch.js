@@ -2,27 +2,30 @@ import React, { useState } from 'react';
 import axios from 'axios';
 import './BatchSearch.css';
 
+// API URL - uses env var in production, proxy in development
+const API_URL = process.env.REACT_APP_API_URL || '';
+
 // Helper: Parse CJ URL to extract keyword and filters
 function parseCJUrl(url) {
   try {
     const urlObj = new URL(url);
     const pathname = urlObj.pathname;
-    
+
     // Extract keyword from /search/KEYWORD.html
     const match = pathname.match(/\/search\/(.+?)\.html/);
     const keyword = match ? decodeURIComponent(match[1]) : '';
-    
+
     // Extract filters from query params
     const params = new URLSearchParams(urlObj.search);
     const options = {};
-    
+
     if (params.get('verifiedWarehouse') === '1') {
       options.verifiedWarehouse = true;
     }
     if (params.get('startWarehouseInventory')) {
       options.minInventory = parseInt(params.get('startWarehouseInventory'));
     }
-    
+
     return { keyword, options };
   } catch (e) {
     return { keyword: '', options: {} };
@@ -54,9 +57,9 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
 
   const handleBatchScrape = async (e) => {
     e.preventDefault();
-    
-    const activeSearches = searches.filter(s => s.enabled && (s.keyword.trim() || s.url.trim()));
-    
+
+    const activeSearches = searches.filter(s => s.enabled && s.keyword.trim());
+
     if (activeSearches.length === 0) {
       setError('Please enter at least one search keyword or CJ URL');
       return;
@@ -69,46 +72,71 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
     try {
       // Process each search sequentially
       const batchResults = [];
-      
+
       for (let i = 0; i < activeSearches.length; i++) {
         const search = activeSearches[i];
-        
-        try {
-          // Parse URL if provided, otherwise use keyword
-          let searchTerm = search.keyword.trim();
-          let options = { store: search.store || undefined };
-          
-          if (search.url.trim()) {
-            const parsed = parseCJUrl(search.url.trim());
-            searchTerm = parsed.keyword || searchTerm;
-            options = { ...options, ...parsed.options };
+        const requestBody = {
+          searchTerm: search.keyword.trim(),
+          options: {
+            store: search.store || undefined
           }
-          
-          const response = await axios.post('/api/scrape', {
-            searchTerm,
-            options
+        };
+
+        // Debug logging
+        const requestUrl = `${API_URL}/api/scrape`;
+        console.log('='.repeat(60));
+        console.log('[BatchSearch] Making request:', {
+          url: requestUrl,
+          method: 'POST',
+          body: requestBody,
+          searchIndex: i + 1,
+          totalSearches: activeSearches.length
+        });
+        console.log('='.repeat(60));
+
+        try {
+          const response = await axios.post(requestUrl, requestBody);
+
+          console.log('[BatchSearch] SUCCESS Response:', {
+            status: response.status,
+            data: response.data,
+            requestId: response.data?.requestId
           });
 
           batchResults.push({
-            keyword: searchTerm,
+            keyword: search.keyword,
             store: search.store,
             url: search.url,
             success: true,
             data: response.data
           });
         } catch (err) {
+          // Detailed error logging
+          console.error('[BatchSearch] ERROR:', {
+            message: err.message,
+            status: err.response?.status,
+            statusText: err.response?.statusText,
+            data: err.response?.data,
+            headers: err.response?.headers,
+            config: {
+              url: err.config?.url,
+              method: err.config?.method,
+              data: err.config?.data
+            }
+          });
+
           batchResults.push({
             keyword: search.keyword || 'URL provided',
             store: search.store,
             url: search.url,
             success: false,
-            error: err.response?.data?.error || err.message
+            error: err.response?.data?.error || `${err.message} (Status: ${err.response?.status || 'unknown'})`
           });
         }
 
         // Update progress
         setResults([...batchResults]);
-        
+
         // Small delay between requests to avoid rate limiting
         if (i < activeSearches.length - 1) {
           await new Promise(resolve => setTimeout(resolve, 1000));
@@ -124,7 +152,7 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
 
   const exportResults = () => {
     const successfulResults = results.filter(r => r.success && r.data.products);
-    
+
     const csv = [
       ['Keyword', 'Store', 'Product Title', 'Price', 'Lists', 'URL']
     ];
@@ -158,7 +186,7 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
     }
 
     const successfulResults = results.filter(r => r.success && r.data.products);
-    
+
     if (successfulResults.length === 0) {
       alert('No products to upload. Run a batch search first.');
       return;
@@ -280,8 +308,8 @@ function BatchSearch({ shopifyStore, shopifyToken }) {
                 <button onClick={exportResults} className="export-btn">
                   📥 Export CSV
                 </button>
-                <button 
-                  onClick={uploadToShopify} 
+                <button
+                  onClick={uploadToShopify}
                   className="shopify-btn"
                   disabled={uploading}
                 >
