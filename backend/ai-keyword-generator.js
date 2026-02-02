@@ -19,8 +19,8 @@ let model = null;
 function initGemini(apiKey) {
     if (!genAI && apiKey) {
         genAI = new GoogleGenerativeAI(apiKey);
-        model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
-        console.log('[AI Generator] Gemini Flash 2.0 initialized');
+        model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+        console.log('[AI Generator] Gemini 2.0 Flash initialized');
     }
     return model;
 }

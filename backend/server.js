@@ -101,6 +101,35 @@ function isRelevantProduct(productTitle, searchTerm) {
   // Extract main keywords (words > 2 chars)
   const searchWords = lowerSearch.split(' ').filter(w => w.length > 2);
 
+  // ===== TEXT-BASED REJECT PATTERNS =====
+  // If searching for throws/blankets, reject products with "pillow" in title
+  const textRejectPatterns = {
+    'throw': ['pillow', 'cushion', 'pillowcase', 'cushion cover'],
+    'blanket': ['pillow', 'cushion', 'pillowcase'],
+    'fur': ['keychain', 'key chain', 'pendant', 'earring'],
+  };
+
+  // Check if title contains reject terms for this search
+  for (const [searchKey, rejectTerms] of Object.entries(textRejectPatterns)) {
+    if (lowerSearch.includes(searchKey)) {
+      // Check if any reject term is in the title WITHOUT the search term nearby
+      for (const reject of rejectTerms) {
+        if (lowerTitle.includes(reject)) {
+          // Special case: "throw pillow" is explicitly a pillow, not a throw blanket
+          if (lowerTitle.includes('throw pillow') || lowerTitle.includes('throw pillows')) {
+            console.log(`[Text Filter] ❌ Rejected "${title.substring(0, 50)}..." - contains "throw pillow"`);
+            return false;
+          }
+          // If title has pillow but NOT blanket/throw (as a blanket), reject
+          if (!lowerTitle.includes('blanket') && !lowerTitle.includes('throw blanket')) {
+            console.log(`[Text Filter] ❌ Rejected "${title.substring(0, 50)}..." - contains "${reject}"`);
+            return false;
+          }
+        }
+      }
+    }
+  }
+
   // VERY RELAXED: At least ONE search word should be present
   // Image detection will catch false positives
   const matchingWords = searchWords.filter(word => lowerTitle.includes(word));
