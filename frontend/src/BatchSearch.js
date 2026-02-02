@@ -18,7 +18,6 @@ function BatchSearch({ stores, activeStore, activeStoreId, setActiveStoreId }) {
   const [error, setError] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [expandedResults, setExpandedResults] = useState({}); // Track which results are expanded
-  const [currentScrapeId, setCurrentScrapeId] = useState(null); // Track current scrape for cancellation
   const [isCancelling, setIsCancelling] = useState(false);
 
   const addSearch = () => {
@@ -54,7 +53,6 @@ function BatchSearch({ stores, activeStore, activeStoreId, setActiveStoreId }) {
     } finally {
       setIsCancelling(false);
       setLoading(false);
-      setCurrentScrapeId(null);
     }
   };
 
