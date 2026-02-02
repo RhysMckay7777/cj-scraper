@@ -117,12 +117,12 @@ function isRelevantProduct(productTitle, searchTerm) {
         if (lowerTitle.includes(reject)) {
           // Special case: "throw pillow" is explicitly a pillow, not a throw blanket
           if (lowerTitle.includes('throw pillow') || lowerTitle.includes('throw pillows')) {
-            console.log(`[Text Filter] ❌ Rejected "${title.substring(0, 50)}..." - contains "throw pillow"`);
+            console.log(`[Text Filter] ❌ Rejected "${productTitle.substring(0, 50)}..." - contains "throw pillow"`);
             return false;
           }
           // If title has pillow but NOT blanket/throw (as a blanket), reject
           if (!lowerTitle.includes('blanket') && !lowerTitle.includes('throw blanket')) {
-            console.log(`[Text Filter] ❌ Rejected "${title.substring(0, 50)}..." - contains "${reject}"`);
+            console.log(`[Text Filter] ❌ Rejected "${productTitle.substring(0, 50)}..." - contains "${reject}"`);
             return false;
           }
         }
@@ -405,8 +405,10 @@ app.post('/api/scrape', async (req, res) => {
       throw new Error('Scrape cancelled by user');
     }
 
-    // Apply text filtering
-    let textFiltered = apiResult.products.filter(p => isRelevantProduct(p.title, keyword));
+    // Apply text filtering - CJ API uses productNameEn or productName
+    let textFiltered = apiResult.products.filter(p =>
+      isRelevantProduct(p.productNameEn || p.productName || '', keyword)
+    );
 
     // BUG FIX: Limit total products to prevent runaway scrapes
     const MAX_PRODUCTS_TO_PROCESS = 1000;
