@@ -665,44 +665,7 @@ app.post('/api/upload-shopify', async (req, res) => {
   const BATCH_SIZE = 10; // 10 products per GraphQL request (safe for rate limits)
   const GRAPHQL_ENDPOINT = `https://${shopifyStore}/admin/api/2026-01/graphql.json`;
 
-  // Helper: Convert JS object to GraphQL input format (not JSON!)
-  // GraphQL needs: {title: "Hat"} NOT {"title": "Hat"}
-  const toGraphQLInput = (obj) => {
-    if (obj === null || obj === undefined) {
-      return 'null';
-    }
-
-    if (Array.isArray(obj)) {
-      return `[${obj.map(item => toGraphQLInput(item)).join(', ')}]`;
-    }
-
-    if (typeof obj === 'object') {
-      const fields = Object.entries(obj)
-        .filter(([_, value]) => value !== undefined && value !== null && value !== '')
-        .map(([key, value]) => `${key}: ${toGraphQLInput(value)}`)
-        .join(', ');
-      return `{${fields}}`;
-    }
-
-    if (typeof obj === 'string') {
-      // Escape quotes, backslashes, and control characters
-      const escaped = obj
-        .replace(/\\/g, '\\\\')
-        .replace(/"/g, '\\"')
-        .replace(/\n/g, '\\n')
-        .replace(/\r/g, '\\r')
-        .replace(/\t/g, '\\t');
-      return `"${escaped}"`;
-    }
-
-    if (typeof obj === 'number' || typeof obj === 'boolean') {
-      return String(obj);
-    }
-
-    return '""';
-  };
-
-  // Helper: Build productSet input
+  // Helper: Build productSet input for GraphQL variables
   const buildProductSetInput = (product) => {
     const priceMatch = (product.price || '0').toString().match(/[\d.]+/);
     const price = priceMatch ? parseFloat(priceMatch[0]) : 0;
@@ -713,7 +676,7 @@ app.post('/api/upload-shopify', async (req, res) => {
       title: product.title || 'Untitled Product',
       vendor: 'CJ Dropshipping',
       productType: 'Imported',
-      status: 'ACTIVE',
+      status: 'ACTIVE', // Enum - GraphQL variables handle this automatically
       tags: ['dropship', 'cj', product.sourceKeyword || ''].filter(Boolean),
       // Single variant product - use default option
       productOptions: [{
@@ -723,8 +686,8 @@ app.post('/api/upload-shopify', async (req, res) => {
       }],
       variants: [{
         optionValues: [{ optionName: 'Title', name: 'Default Title' }],
-        price: parseFloat(sellingPrice.toFixed(2)),
-        compareAtPrice: parseFloat(comparePrice.toFixed(2)),
+        price: sellingPrice.toFixed(2),
+        compareAtPrice: comparePrice.toFixed(2),
         sku: product.sku || ''
       }]
     };
@@ -733,7 +696,7 @@ app.post('/api/upload-shopify', async (req, res) => {
     if (product.image) {
       input.files = [{
         originalSource: product.image,
-        contentType: 'IMAGE'
+        contentType: 'IMAGE' // Enum - GraphQL variables handle this automatically
       }];
     }
 
@@ -761,14 +724,12 @@ app.post('/api/upload-shopify', async (req, res) => {
         break;
       }
 
-      // Build GraphQL mutation with aliases using productSet
-      const aliasedMutations = batch.map((product, index) => {
-        const alias = `p${batchIndex * BATCH_SIZE + index}`;
-        const input = buildProductSetInput(product);
-        const inputGraphQL = toGraphQLInput(input); // Use GraphQL format, NOT JSON!
-
+      // Build GraphQL mutation with variables (handles enums automatically!)
+      const varDefs = batch.map((_, i) => `$input${i}: ProductSetInput!`).join(', ');
+      const mutations = batch.map((_, i) => {
+        const alias = `p${batchIndex * BATCH_SIZE + i}`;
         return `
-          ${alias}: productSet(synchronous: true, input: ${inputGraphQL}) {
+          ${alias}: productSet(synchronous: true, input: $input${i}) {
             product { 
               id 
               title
@@ -782,11 +743,18 @@ app.post('/api/upload-shopify', async (req, res) => {
         `;
       }).join('\n');
 
-      const mutation = `mutation BatchProductSet { ${aliasedMutations} }`;
+      const mutation = `mutation BatchProductSet(${varDefs}) { ${mutations} }`;
+
+      // Build variables object - JSON format, GraphQL handles type conversion!
+      const variables = {};
+      batch.forEach((product, i) => {
+        variables[`input${i}`] = buildProductSetInput(product);
+      });
 
       try {
         const response = await axios.post(GRAPHQL_ENDPOINT, {
-          query: mutation
+          query: mutation,
+          variables: variables // ✅ GraphQL handles enum conversion automatically!
         }, {
           headers: {
             'Content-Type': 'application/json',
