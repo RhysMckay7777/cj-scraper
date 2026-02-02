@@ -662,7 +662,7 @@ app.post('/api/upload-shopify', async (req, res) => {
   activeUploads.set(uploadId, { cancelled: false, startedAt: Date.now() });
 
   // GraphQL batch configuration
-  const BATCH_SIZE = 10; // 10 products per GraphQL request (safe for rate limits)
+  const BATCH_SIZE = 30; // 30 products per GraphQL request (optimized for speed)
   const GRAPHQL_ENDPOINT = `https://${shopifyStore}/admin/api/2026-01/graphql.json`;
 
   // Helper: Build productSet input for GraphQL variables
