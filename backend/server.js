@@ -665,15 +665,41 @@ app.post('/api/upload-shopify', async (req, res) => {
   const BATCH_SIZE = 10; // 10 products per GraphQL request (safe for rate limits)
   const GRAPHQL_ENDPOINT = `https://${shopifyStore}/admin/api/2026-01/graphql.json`;
 
-  // Helper: Escape string for JSON in GraphQL
-  const escapeForJson = (str) => {
-    if (!str) return '';
-    return str
-      .replace(/\\/g, '\\\\')
-      .replace(/"/g, '\\"')
-      .replace(/\n/g, '\\n')
-      .replace(/\r/g, '\\r')
-      .replace(/\t/g, '\\t');
+  // Helper: Convert JS object to GraphQL input format (not JSON!)
+  // GraphQL needs: {title: "Hat"} NOT {"title": "Hat"}
+  const toGraphQLInput = (obj) => {
+    if (obj === null || obj === undefined) {
+      return 'null';
+    }
+
+    if (Array.isArray(obj)) {
+      return `[${obj.map(item => toGraphQLInput(item)).join(', ')}]`;
+    }
+
+    if (typeof obj === 'object') {
+      const fields = Object.entries(obj)
+        .filter(([_, value]) => value !== undefined && value !== null && value !== '')
+        .map(([key, value]) => `${key}: ${toGraphQLInput(value)}`)
+        .join(', ');
+      return `{${fields}}`;
+    }
+
+    if (typeof obj === 'string') {
+      // Escape quotes, backslashes, and control characters
+      const escaped = obj
+        .replace(/\\/g, '\\\\')
+        .replace(/"/g, '\\"')
+        .replace(/\n/g, '\\n')
+        .replace(/\r/g, '\\r')
+        .replace(/\t/g, '\\t');
+      return `"${escaped}"`;
+    }
+
+    if (typeof obj === 'number' || typeof obj === 'boolean') {
+      return String(obj);
+    }
+
+    return '""';
   };
 
   // Helper: Build productSet input
@@ -739,10 +765,10 @@ app.post('/api/upload-shopify', async (req, res) => {
       const aliasedMutations = batch.map((product, index) => {
         const alias = `p${batchIndex * BATCH_SIZE + index}`;
         const input = buildProductSetInput(product);
-        const inputJson = JSON.stringify(input);
+        const inputGraphQL = toGraphQLInput(input); // Use GraphQL format, NOT JSON!
 
         return `
-          ${alias}: productSet(synchronous: true, input: ${inputJson}) {
+          ${alias}: productSet(synchronous: true, input: ${inputGraphQL}) {
             product { 
               id 
               title
