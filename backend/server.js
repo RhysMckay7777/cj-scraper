@@ -196,8 +196,7 @@ async function analyzeProductImage(imageUrl, searchTerm, imageIndex = 0, dynamic
 
     // Use retry wrapper for the entire operation
     return await withRetry(async () => {
-      // Download image first
-      console.log(`    [Vision:${imageIndex}] Downloading image...`);
+      // Download image (silent - batch progress shown at batch level)
       const response = await axios.get(imageUrl, {
         responseType: 'arraybuffer',
         timeout: 15000,
@@ -208,7 +207,6 @@ async function analyzeProductImage(imageUrl, searchTerm, imageIndex = 0, dynamic
 
       const imageBuffer = Buffer.from(response.data);
       const base64Image = imageBuffer.toString('base64');
-      console.log(`    [Vision:${imageIndex}] Downloaded (${(imageBuffer.length / 1024).toFixed(1)}KB) - Calling API...`);
 
       let labels = [];
 
@@ -235,7 +233,7 @@ async function analyzeProductImage(imageUrl, searchTerm, imageIndex = 0, dynamic
       }
 
       const detectedLabels = labels.map(l => l.description.toLowerCase());
-      console.log(`    [Vision:${imageIndex}] Detected: ${detectedLabels.slice(0, 5).join(', ')}`);
+      // Log removed - batch summary provides progress
 
       // ===========================================
       // AI-POWERED DYNAMIC FILTERING
@@ -263,8 +261,7 @@ async function analyzeProductImage(imageUrl, searchTerm, imageIndex = 0, dynamic
               label.includes(reject) || reject.includes(label)
             )
           );
-          console.log(`    [Vision:${imageIndex}] ❌ REJECTED by: ${matchedReject.join(', ')}`);
-          return false;
+          return false; // Rejected by: matched reject labels
         }
 
         // Check valid labels
@@ -275,12 +272,10 @@ async function analyzeProductImage(imageUrl, searchTerm, imageIndex = 0, dynamic
         );
 
         if (hasValidMatch) {
-          console.log(`    [Vision:${imageIndex}] ✅ PASSED (valid label match)`);
-          return true;
+          return true; // Passed: valid label match
         }
 
-        console.log(`    [Vision:${imageIndex}] ❌ REJECTED (no valid labels)`);
-        return false;
+        return false; // Rejected: no valid labels
       }
 
       // ===========================================
