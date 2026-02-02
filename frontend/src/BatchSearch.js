@@ -19,6 +19,7 @@ function BatchSearch({ stores, activeStore, activeStoreId, setActiveStoreId }) {
   const [uploading, setUploading] = useState(false);
   const [expandedResults, setExpandedResults] = useState({}); // Track which results are expanded
   const [isCancelling, setIsCancelling] = useState(false);
+  const [isUploadCancelling, setIsUploadCancelling] = useState(false);
 
   const addSearch = () => {
     setSearches([...searches, { keyword: '', url: '', enabled: true }]);
@@ -226,10 +227,27 @@ function BatchSearch({ stores, activeStore, activeStoreId, setActiveStoreId }) {
       });
 
       alert(`Successfully uploaded ${response.data.uploaded}/${allProducts.length} products to Shopify!`);
+      if (response.data.limitApplied) {
+        alert(`Note: ${response.data.limitApplied}`);
+      }
     } catch (err) {
       setError(err.response?.data?.error || err.message);
       alert('Upload failed: ' + (err.response?.data?.error || err.message));
     } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleCancelUpload = async () => {
+    setIsUploadCancelling(true);
+    try {
+      await axios.post(`${API_URL}/api/upload-shopify/cancel-all`);
+      console.log('Upload cancelled');
+      setError('Upload cancelled by user');
+    } catch (err) {
+      console.error('Failed to cancel upload:', err);
+    } finally {
+      setIsUploadCancelling(false);
       setUploading(false);
     }
   };
@@ -342,16 +360,24 @@ function BatchSearch({ stores, activeStore, activeStoreId, setActiveStoreId }) {
                       ))}
                     </select>
                   )}
-                  <button
-                    onClick={uploadToShopify}
-                    className="shopify-btn"
-                    disabled={uploading || !activeStore}
-                    title={activeStore ? `Upload to ${activeStore.name}` : 'Add a store first'}
-                  >
-                    {uploading
-                      ? '⏳ Uploading...'
-                      : `🏪 Upload to ${activeStore?.name || 'Shopify'}`}
-                  </button>
+                  {uploading ? (
+                    <button
+                      onClick={handleCancelUpload}
+                      className="stop-btn"
+                      disabled={isUploadCancelling}
+                    >
+                      {isUploadCancelling ? '⏳ Cancelling...' : '🛑 Stop Upload'}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={uploadToShopify}
+                      className="shopify-btn"
+                      disabled={uploading || !activeStore}
+                      title={activeStore ? `Upload to ${activeStore.name}` : 'Add a store first'}
+                    >
+                      🏪 Upload to {activeStore?.name || 'Shopify'}
+                    </button>
+                  )}
                 </div>
               </div>
             )}

@@ -591,9 +591,13 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Track active uploads for cancellation
+const activeUploads = new Map();
+
 // Upload products to Shopify
 app.post('/api/upload-shopify', async (req, res) => {
   const requestId = Date.now().toString(36);
+  const uploadId = `upload_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   console.log(`[${requestId}] POST /api/upload-shopify`);
 
   const { products, markup = 250, shopifyStore, shopifyToken } = req.body;
@@ -609,11 +613,31 @@ app.post('/api/upload-shopify', async (req, res) => {
     });
   }
 
+  // Limit products to prevent timeout (Render free tier)
+  const MAX_PRODUCTS_PER_UPLOAD = 200;
+  let productsToUpload = products;
+  if (products.length > MAX_PRODUCTS_PER_UPLOAD) {
+    console.log(`⚠️ Limiting upload to first ${MAX_PRODUCTS_PER_UPLOAD} products (requested ${products.length})`);
+    productsToUpload = products.slice(0, MAX_PRODUCTS_PER_UPLOAD);
+  }
+
+  // Track this upload for cancellation
+  activeUploads.set(uploadId, { cancelled: false, startedAt: Date.now() });
+
   try {
     const results = [];
+    console.log(`[${requestId}] Uploading ${productsToUpload.length} products to Shopify...`);
 
     // Upload products sequentially to avoid rate limits
-    for (const product of products) {
+    for (let i = 0; i < productsToUpload.length; i++) {
+      const product = productsToUpload[i];
+
+      // Check for cancellation
+      if (activeUploads.get(uploadId)?.cancelled) {
+        console.log(`[${requestId}] ⛔ Upload cancelled at product ${i + 1}/${productsToUpload.length}`);
+        break;
+      }
+
       try {
         // Parse price
         const priceMatch = (product.price || '0').toString().match(/[\d.]+/);
@@ -657,7 +681,7 @@ app.post('/api/upload-shopify', async (req, res) => {
           shopifyUrl: `https://${shopifyStore}/admin/products/${response.data.product.id}`
         });
 
-        console.log(`[${requestId}] ✅ Uploaded: ${product.title}`);
+        console.log(`[${requestId}] ✅ ${i + 1}/${productsToUpload.length} Uploaded: ${product.title.substring(0, 50)}...`);
 
         // Delay to respect Shopify rate limits (2 calls/second)
         await new Promise(resolve => setTimeout(resolve, 500));
@@ -672,6 +696,9 @@ app.post('/api/upload-shopify', async (req, res) => {
       }
     }
 
+    // Cleanup
+    activeUploads.delete(uploadId);
+
     const successCount = results.filter(r => r.success).length;
 
     res.json({
@@ -680,13 +707,28 @@ app.post('/api/upload-shopify', async (req, res) => {
       total: products.length,
       uploaded: successCount,
       failed: products.length - successCount,
-      results
+      results,
+      uploadId,
+      limitApplied: products.length > MAX_PRODUCTS_PER_UPLOAD ? `Limited from ${products.length} to ${MAX_PRODUCTS_PER_UPLOAD}` : null
     });
 
   } catch (error) {
+    activeUploads.delete(uploadId);
     console.error(`[${requestId}] Error:`, error);
     res.status(500).json({ error: error.message, requestId });
   }
+});
+
+// Cancel all active uploads
+app.post('/api/upload-shopify/cancel-all', (req, res) => {
+  const cancelled = [];
+  activeUploads.forEach((session, id) => {
+    session.cancelled = true;
+    cancelled.push(id);
+  });
+  activeUploads.clear();
+  console.log(`[CANCEL] All uploads cancelled: ${cancelled.length}`);
+  res.json({ success: true, cancelled: cancelled.length, ids: cancelled });
 });
 
 // Serve React frontend
