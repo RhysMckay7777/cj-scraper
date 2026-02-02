@@ -394,56 +394,53 @@ app.post('/api/scrape', async (req, res) => {
     }
 
     // Apply image detection if enabled
-    // IMPORTANT: Render free tier has 512MB memory limit
-    // Processing images uses significant memory - limit to prevent OOM crashes
-    const MAX_PRODUCTS_FOR_VISION = 50; // Reduced from 100 - memory safety
-    const shouldUseVision = useImageDetection && textFiltered.length <= MAX_PRODUCTS_FOR_VISION;
-
-    if (useImageDetection && textFiltered.length > MAX_PRODUCTS_FOR_VISION) {
-      console.log(`⚠️ Auto-disabling Vision API: ${textFiltered.length} products exceeds ${MAX_PRODUCTS_FOR_VISION} limit (would OOM)`);
-      console.log(`💡 Tip: Use more specific filters on CJ website to reduce results`);
-    }
-
+    // BATCH PROCESSING: Process 20 images at a time for speed (optimized for 2GB RAM)
+    // Batch size can be adjusted: 10 for 1GB, 20 for 2GB, 50 for 4GB+
+    const VISION_BATCH_SIZE = 20; // 20 parallel requests = fast but memory safe for 2GB
     let finalProducts = textFiltered;
-    // MEMORY FIX: Reduced batch size from 10 to 3 to prevent 512MB OOM on Render free tier
-    const BATCH_SIZE = 3; // Process only 3 images at a time to save memory
     const SCRAPE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes max scrape time
     const scrapeStartTime = Date.now();
 
-    if (shouldUseVision && textFiltered.length > 0) {
+    if (useImageDetection && textFiltered.length > 0) {
       logMemory('VISION_START');
-      console.log(`Analyzing ${textFiltered.length} products with Google Vision in batches of ${BATCH_SIZE}...`);
+      console.log(`Analyzing ${textFiltered.length} products with Google Vision in batches of ${VISION_BATCH_SIZE}...`);
+      console.log(`Estimated time: ${Math.ceil(textFiltered.length / VISION_BATCH_SIZE * 1.5)} seconds`);
       const imageFiltered = [];
+      const totalBatches = Math.ceil(textFiltered.length / VISION_BATCH_SIZE);
 
-      // Process in parallel batches
-      for (let i = 0; i < textFiltered.length; i += BATCH_SIZE) {
-        // Check for cancellation at start of each batch
+      // BATCH PROCESSING: Process VISION_BATCH_SIZE images in parallel
+      for (let i = 0; i < textFiltered.length; i += VISION_BATCH_SIZE) {
+        // Check for cancellation
         if (activeScrapes.get(scrapeId)?.cancelled) {
           console.log(`[${requestId}] ⛔ Scrape cancelled during Vision processing`);
           break;
         }
 
-        // BUG FIX: Check for timeout
+        // Check for timeout
         if (Date.now() - scrapeStartTime > SCRAPE_TIMEOUT_MS) {
           console.log(`[${requestId}] ⏱️ Scrape timeout reached (${SCRAPE_TIMEOUT_MS / 1000 / 60} minutes), stopping...`);
           break;
         }
 
-        const batch = textFiltered.slice(i, i + BATCH_SIZE);
-        const batchNum = Math.floor(i / BATCH_SIZE) + 1;
-        const totalBatches = Math.ceil(textFiltered.length / BATCH_SIZE);
+        const batch = textFiltered.slice(i, i + VISION_BATCH_SIZE);
+        const batchNum = Math.floor(i / VISION_BATCH_SIZE) + 1;
 
-        console.log(`  Processing batch ${batchNum}/${totalBatches} (${batch.length} products)...`);
+        console.log(`  Batch ${batchNum}/${totalBatches}: processing ${batch.length} images...`);
         logMemory(`BATCH_${batchNum}_START`);
 
-        // Analyze all products in batch simultaneously
+        // Process batch in PARALLEL for speed
         const batchResults = await Promise.all(
           batch.map(async (product, idx) => {
-            if (product.image) {
-              const passed = await analyzeProductImage(product.image, keyword, i + idx);
-              return { product, passed };
+            try {
+              if (product.image) {
+                const passed = await analyzeProductImage(product.image, keyword, i + idx);
+                return { product, passed };
+              }
+              return { product, passed: false };
+            } catch (err) {
+              console.error(`  [${i + idx}] Vision error: ${err.message}`);
+              return { product, passed: false };
             }
-            return { product, passed: false };
           })
         );
 
@@ -454,20 +451,23 @@ app.post('/api/scrape', async (req, res) => {
           }
         });
 
-        console.log(`  Batch ${batchNum} complete: ${batchResults.filter(r => r.passed).length}/${batch.length} passed`);
+        const passedCount = batchResults.filter(r => r.passed).length;
+        console.log(`  Batch ${batchNum}/${totalBatches}: ${passedCount}/${batch.length} passed`);
         logMemory(`BATCH_${batchNum}_END`);
 
-        // MEMORY FIX: Force garbage collection hint between batches
+        // Force garbage collection hint between batches if available
         if (global.gc) {
           global.gc();
         }
 
-        // Delay between batches to avoid rate limiting AND allow memory cleanup
-        if (i + BATCH_SIZE < textFiltered.length) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
+        // Small delay between batches to allow memory cleanup (500ms)
+        if (i + VISION_BATCH_SIZE < textFiltered.length) {
+          await new Promise(resolve => setTimeout(resolve, 500));
         }
       }
 
+      console.log(`Vision analysis complete: ${imageFiltered.length}/${textFiltered.length} passed`);
+      logMemory('VISION_END');
       finalProducts = imageFiltered;
     }
 
@@ -483,7 +483,7 @@ app.post('/api/scrape', async (req, res) => {
       maxFetchable: apiResult.maxFetchablePages ? apiResult.maxFetchablePages * 200 : null,
       pagesScraped: apiResult.fetchedPages || 1,
       textFiltered: textFiltered.length,
-      imageFiltered: shouldUseVision ? finalProducts.length : null,
+      imageFiltered: useImageDetection ? finalProducts.length : null,
       filtered: finalProducts.length,
       passRate: ((finalProducts.length / apiResult.totalProducts) * 100).toFixed(1) + '%',
       products: finalProducts,
@@ -506,10 +506,8 @@ app.post('/api/scrape', async (req, res) => {
     console.log(`📥 Actually Fetched: ${apiResult.actualFetched || apiResult.products?.length || 0} products`);
     console.log(`---`);
     console.log(`📝 Text Filter: ${textFiltered.length}/${apiResult.actualFetched || apiResult.totalProducts} passed (${((textFiltered.length / (apiResult.actualFetched || apiResult.totalProducts)) * 100).toFixed(1)}%)`);
-    if (shouldUseVision) {
+    if (useImageDetection) {
       console.log(`🖼️  Image Filter: ${finalProducts.length}/${textFiltered.length} passed (${textFiltered.length > 0 ? ((finalProducts.length / textFiltered.length) * 100).toFixed(1) : 0}%)`);
-    } else if (useImageDetection) {
-      console.log(`⏭️  Vision API skipped (too many products for Render timeout)`);
     }
     console.log(`---`);
     console.log(`✅ FINAL: ${finalProducts.length} products (${results.passRate} overall pass rate)`);
