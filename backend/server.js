@@ -654,19 +654,19 @@ app.post('/api/upload-shopify', async (req, res) => {
   }
 
   // No limit on products - upload all of them to Shopify
-  // Using GraphQL batch mutations for 10-20x faster uploads
+  // Using GraphQL productSet batch mutations for fast uploads with variants + images
   let productsToUpload = products;
-  console.log(`[${requestId}] Preparing to upload ${productsToUpload.length} products with GraphQL batch mutations...`);
+  console.log(`[${requestId}] Preparing to upload ${productsToUpload.length} products with GraphQL productSet...`);
 
   // Track this upload for cancellation
   activeUploads.set(uploadId, { cancelled: false, startedAt: Date.now() });
 
   // GraphQL batch configuration
-  const BATCH_SIZE = 20; // Safe for Standard Shopify plan (20 × 10 = 200 points)
+  const BATCH_SIZE = 10; // 10 products per GraphQL request (safe for rate limits)
   const GRAPHQL_ENDPOINT = `https://${shopifyStore}/admin/api/2026-01/graphql.json`;
 
-  // Helper: Escape string for GraphQL
-  const escapeGraphQL = (str) => {
+  // Helper: Escape string for JSON in GraphQL
+  const escapeForJson = (str) => {
     if (!str) return '';
     return str
       .replace(/\\/g, '\\\\')
@@ -676,27 +676,42 @@ app.post('/api/upload-shopify', async (req, res) => {
       .replace(/\t/g, '\\t');
   };
 
-  // Helper: Build product input for GraphQL
-  const buildProductInput = (product) => {
+  // Helper: Build productSet input
+  const buildProductSetInput = (product) => {
     const priceMatch = (product.price || '0').toString().match(/[\d.]+/);
     const price = priceMatch ? parseFloat(priceMatch[0]) : 0;
     const sellingPrice = price * (markup / 100);
     const comparePrice = sellingPrice * 1.3;
 
-    return {
+    const input = {
       title: product.title || 'Untitled Product',
       vendor: 'CJ Dropshipping',
       productType: 'Imported',
       status: 'ACTIVE',
       tags: ['dropship', 'cj', product.sourceKeyword || ''].filter(Boolean),
-      variants: [{
-        price: sellingPrice.toFixed(2),
-        compareAtPrice: comparePrice.toFixed(2),
-        inventoryPolicy: 'CONTINUE',
-        sku: product.sku || ''
+      // Single variant product - use default option
+      productOptions: [{
+        name: 'Title',
+        position: 1,
+        values: [{ name: 'Default Title' }]
       }],
-      images: product.image ? [{ src: product.image }] : []
+      variants: [{
+        optionValues: [{ optionName: 'Title', name: 'Default Title' }],
+        price: parseFloat(sellingPrice.toFixed(2)),
+        compareAtPrice: parseFloat(comparePrice.toFixed(2)),
+        sku: product.sku || ''
+      }]
     };
+
+    // Add image if available
+    if (product.image) {
+      input.files = [{
+        originalSource: product.image,
+        contentType: 'IMAGE'
+      }];
+    }
+
+    return input;
   };
 
   try {
@@ -720,34 +735,14 @@ app.post('/api/upload-shopify', async (req, res) => {
         break;
       }
 
-      // Build GraphQL mutation with aliases
+      // Build GraphQL mutation with aliases using productSet
       const aliasedMutations = batch.map((product, index) => {
         const alias = `p${batchIndex * BATCH_SIZE + index}`;
-        const input = buildProductInput(product);
-
-        // Build variants string
-        const variantsStr = input.variants.map(v =>
-          `{ price: "${v.price}", compareAtPrice: "${v.compareAtPrice}", inventoryPolicy: CONTINUE, sku: "${escapeGraphQL(v.sku)}" }`
-        ).join(', ');
-
-        // Build images string
-        const imagesStr = input.images.length > 0
-          ? `images: [{ src: "${escapeGraphQL(input.images[0].src)}" }]`
-          : '';
-
-        // Build tags string
-        const tagsStr = input.tags.map(t => `"${escapeGraphQL(t)}"`).join(', ');
+        const input = buildProductSetInput(product);
+        const inputJson = JSON.stringify(input);
 
         return `
-          ${alias}: productCreate(input: {
-            title: "${escapeGraphQL(input.title)}"
-            vendor: "${escapeGraphQL(input.vendor)}"
-            productType: "${escapeGraphQL(input.productType)}"
-            status: ACTIVE
-            tags: [${tagsStr}]
-            variants: [${variantsStr}]
-            ${imagesStr}
-          }) {
+          ${alias}: productSet(synchronous: true, input: ${inputJson}) {
             product { 
               id 
               title
@@ -761,7 +756,7 @@ app.post('/api/upload-shopify', async (req, res) => {
         `;
       }).join('\n');
 
-      const mutation = `mutation BatchCreate { ${aliasedMutations} }`;
+      const mutation = `mutation BatchProductSet { ${aliasedMutations} }`;
 
       try {
         const response = await axios.post(GRAPHQL_ENDPOINT, {
@@ -771,15 +766,14 @@ app.post('/api/upload-shopify', async (req, res) => {
             'Content-Type': 'application/json',
             'X-Shopify-Access-Token': shopifyToken
           },
-          timeout: 60000 // 60 second timeout per batch
+          timeout: 120000 // 2 minute timeout for batch with images
         });
 
         const { data, errors, extensions } = response.data;
 
-        // Check for GraphQL errors
+        // Check for GraphQL-level errors
         if (errors) {
           console.error(`[${requestId}] GraphQL errors:`, errors);
-          // Mark all products in batch as failed
           batch.forEach(product => {
             results.push({
               title: product.title,
@@ -793,18 +787,24 @@ app.post('/api/upload-shopify', async (req, res) => {
             const result = data[alias];
             const product = batch[index];
 
-            if (result.product) {
+            if (result?.product) {
               results.push({
                 title: product.title,
                 success: true,
                 productId: result.product.id,
                 handle: result.product.handle
               });
-            } else if (result.userErrors?.length > 0) {
+            } else if (result?.userErrors?.length > 0) {
               results.push({
                 title: product.title,
                 success: false,
                 error: result.userErrors.map(e => e.message).join(', ')
+              });
+            } else {
+              results.push({
+                title: product.title,
+                success: false,
+                error: 'Unknown error'
               });
             }
           });
@@ -817,28 +817,27 @@ app.post('/api/upload-shopify', async (req, res) => {
           console.log(`[${requestId}] ✅ Batch ${batchIndex + 1}/${batches.length} done | Rate limit: ${(availablePercent * 100).toFixed(0)}%`);
 
           if (availablePercent < 0.2) {
-            console.log(`[${requestId}] ⏳ Low rate limit, waiting 2s...`);
-            await new Promise(resolve => setTimeout(resolve, 2000));
-          } else if (availablePercent < 0.5) {
-            await new Promise(resolve => setTimeout(resolve, 500));
+            console.log(`[${requestId}] ⏳ Low rate limit, waiting 3s...`);
+            await new Promise(resolve => setTimeout(resolve, 3000));
+          } else if (availablePercent < 0.4) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
           }
         } else {
           console.log(`[${requestId}] ✅ Batch ${batchIndex + 1}/${batches.length} done`);
         }
 
-        // Small delay between batches
-        await new Promise(resolve => setTimeout(resolve, 200));
+        // Delay between batches
+        await new Promise(resolve => setTimeout(resolve, 500));
 
       } catch (error) {
         console.error(`[${requestId}] ❌ Batch ${batchIndex + 1} failed:`, error.response?.data || error.message);
 
         // Check for rate limiting
         if (error.response?.status === 429) {
-          const retryAfter = parseInt(error.response.headers['retry-after']) || 2;
+          const retryAfter = parseInt(error.response.headers['retry-after']) || 3;
           console.log(`[${requestId}] ⏳ Rate limited, retrying after ${retryAfter}s...`);
           await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
-          // Retry this batch
-          batchIndex--;
+          batchIndex--; // Retry this batch
           continue;
         }
 
@@ -872,7 +871,7 @@ app.post('/api/upload-shopify', async (req, res) => {
       failed: failedCount,
       results,
       uploadId,
-      method: 'GraphQL Batch Mutations',
+      method: 'GraphQL productSet Batch',
       batchSize: BATCH_SIZE
     });
 
