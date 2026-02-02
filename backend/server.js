@@ -4,6 +4,27 @@ const axios = require('axios');
 const fs = require('fs');
 const { searchCJProducts, getCJCategories, cancelScrape, generateScrapeId, MAX_OFFSET } = require('./cj-api-scraper');
 
+// ============================================
+// DEBUG: Global error handlers to catch crashes
+// ============================================
+process.on('uncaughtException', (err) => {
+  console.error('💥 UNCAUGHT EXCEPTION:', err.message);
+  console.error('Stack:', err.stack);
+  // Don't exit - let Render handle it
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('💥 UNHANDLED REJECTION at:', promise);
+  console.error('Reason:', reason);
+});
+
+// Memory logging utility
+function logMemory(checkpoint) {
+  const used = process.memoryUsage();
+  const mb = (bytes) => (bytes / 1024 / 1024).toFixed(2) + 'MB';
+  console.log(`[MEMORY:${checkpoint}] Heap: ${mb(used.heapUsed)}/${mb(used.heapTotal)} | RSS: ${mb(used.rss)} | External: ${mb(used.external)}`);
+}
+
 // Track active scrape sessions for cancellation
 const activeScrapes = new Map();
 
@@ -130,16 +151,17 @@ async function withRetry(fn, maxRetries = 3, baseDelayMs = 1000) {
 
 // Analyze image with Google Vision API - DYNAMIC category detection
 // Now includes retry logic for transient errors
-async function analyzeProductImage(imageUrl, searchTerm) {
+async function analyzeProductImage(imageUrl, searchTerm, imageIndex = 0) {
+  const startTime = Date.now();
   try {
     if (!GOOGLE_VISION_API_KEY && !process.env.GOOGLE_APPLICATION_CREDENTIALS && !GOOGLE_CREDENTIALS_JSON) {
-      console.log('  ⚠️  Vision API not configured - skipping image detection');
       return true; // Default pass if no credentials
     }
 
     // Use retry wrapper for the entire operation
     return await withRetry(async () => {
       // Download image first
+      console.log(`    [Vision:${imageIndex}] Downloading image...`);
       const response = await axios.get(imageUrl, {
         responseType: 'arraybuffer',
         timeout: 15000, // Increased timeout
@@ -150,6 +172,7 @@ async function analyzeProductImage(imageUrl, searchTerm) {
 
       const imageBuffer = Buffer.from(response.data);
       const base64Image = imageBuffer.toString('base64');
+      console.log(`    [Vision:${imageIndex}] Downloaded (${(imageBuffer.length / 1024).toFixed(1)}KB) - Calling API...`);
 
       let labels = [];
 
@@ -369,13 +392,24 @@ app.post('/api/scrape', async (req, res) => {
     }
 
     // Apply image detection if enabled
-    // REDUCED batch size from 30 to 10 to avoid Vision API rate limits
+    // IMPORTANT: Render free tier has 512MB memory limit
+    // Processing images uses significant memory - limit to prevent OOM crashes
+    const MAX_PRODUCTS_FOR_VISION = 50; // Reduced from 100 - memory safety
+    const shouldUseVision = useImageDetection && textFiltered.length <= MAX_PRODUCTS_FOR_VISION;
+
+    if (useImageDetection && textFiltered.length > MAX_PRODUCTS_FOR_VISION) {
+      console.log(`⚠️ Auto-disabling Vision API: ${textFiltered.length} products exceeds ${MAX_PRODUCTS_FOR_VISION} limit (would OOM)`);
+      console.log(`💡 Tip: Use more specific filters on CJ website to reduce results`);
+    }
+
     let finalProducts = textFiltered;
-    const BATCH_SIZE = 10; // Reduced from 30 for better rate limit handling
+    // MEMORY FIX: Reduced batch size from 10 to 3 to prevent 512MB OOM on Render free tier
+    const BATCH_SIZE = 3; // Process only 3 images at a time to save memory
     const SCRAPE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes max scrape time
     const scrapeStartTime = Date.now();
 
-    if (useImageDetection && textFiltered.length > 0) {
+    if (shouldUseVision && textFiltered.length > 0) {
+      logMemory('VISION_START');
       console.log(`Analyzing ${textFiltered.length} products with Google Vision in batches of ${BATCH_SIZE}...`);
       const imageFiltered = [];
 
@@ -398,12 +432,13 @@ app.post('/api/scrape', async (req, res) => {
         const totalBatches = Math.ceil(textFiltered.length / BATCH_SIZE);
 
         console.log(`  Processing batch ${batchNum}/${totalBatches} (${batch.length} products)...`);
+        logMemory(`BATCH_${batchNum}_START`);
 
         // Analyze all products in batch simultaneously
         const batchResults = await Promise.all(
-          batch.map(async (product) => {
+          batch.map(async (product, idx) => {
             if (product.image) {
-              const passed = await analyzeProductImage(product.image, keyword);
+              const passed = await analyzeProductImage(product.image, keyword, i + idx);
               return { product, passed };
             }
             return { product, passed: false };
@@ -418,10 +453,16 @@ app.post('/api/scrape', async (req, res) => {
         });
 
         console.log(`  Batch ${batchNum} complete: ${batchResults.filter(r => r.passed).length}/${batch.length} passed`);
+        logMemory(`BATCH_${batchNum}_END`);
 
-        // Increased delay between batches to avoid rate limiting (1.5s instead of 1s)
+        // MEMORY FIX: Force garbage collection hint between batches
+        if (global.gc) {
+          global.gc();
+        }
+
+        // Delay between batches to avoid rate limiting AND allow memory cleanup
         if (i + BATCH_SIZE < textFiltered.length) {
-          await new Promise(resolve => setTimeout(resolve, 1500));
+          await new Promise(resolve => setTimeout(resolve, 1000));
         }
       }
 
@@ -440,11 +481,12 @@ app.post('/api/scrape', async (req, res) => {
       maxFetchable: apiResult.maxFetchablePages ? apiResult.maxFetchablePages * 200 : null,
       pagesScraped: apiResult.fetchedPages || 1,
       textFiltered: textFiltered.length,
-      imageFiltered: useImageDetection ? finalProducts.length : null,
+      imageFiltered: shouldUseVision ? finalProducts.length : null,
       filtered: finalProducts.length,
       passRate: ((finalProducts.length / apiResult.totalProducts) * 100).toFixed(1) + '%',
       products: finalProducts,
-      imageDetectionUsed: useImageDetection,
+      imageDetectionUsed: shouldUseVision,
+      imageDetectionSkipped: useImageDetection && !shouldUseVision ? `Auto-disabled: ${textFiltered.length} products exceeds ${MAX_PRODUCTS_FOR_VISION} limit` : null,
       scrapeId: scrapeId
     };
 
@@ -462,8 +504,10 @@ app.post('/api/scrape', async (req, res) => {
     console.log(`📥 Actually Fetched: ${apiResult.actualFetched || apiResult.products?.length || 0} products`);
     console.log(`---`);
     console.log(`📝 Text Filter: ${textFiltered.length}/${apiResult.actualFetched || apiResult.totalProducts} passed (${((textFiltered.length / (apiResult.actualFetched || apiResult.totalProducts)) * 100).toFixed(1)}%)`);
-    if (useImageDetection) {
+    if (shouldUseVision) {
       console.log(`🖼️  Image Filter: ${finalProducts.length}/${textFiltered.length} passed (${textFiltered.length > 0 ? ((finalProducts.length / textFiltered.length) * 100).toFixed(1) : 0}%)`);
+    } else if (useImageDetection) {
+      console.log(`⏭️  Vision API skipped (too many products for Render timeout)`);
     }
     console.log(`---`);
     console.log(`✅ FINAL: ${finalProducts.length} products (${results.passRate} overall pass rate)`);
