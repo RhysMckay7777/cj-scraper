@@ -216,55 +216,98 @@ async function analyzeProductImage(imageUrl, searchTerm, imageIndex = 0) {
 
       // Semantic keyword expansions - maps keywords to related valid labels
       const keywordExpansions = {
-        // Home textiles
-        'blanket': ['blanket', 'throw', 'textile', 'fabric', 'fleece', 'bedding', 'wool', 'woolen', 'fur', 'velvet', 'flannel', 'plush', 'soft', 'warm', 'cozy', 'quilt', 'comforter', 'duvet', 'cover', 'material', 'natural material', 'knit', 'cotton', 'polyester', 'sherpa', 'coral'],
-        'throw': ['throw', 'blanket', 'textile', 'fabric', 'bedding', 'wool', 'fur', 'soft', 'cozy'],
-        'fleece': ['fleece', 'blanket', 'fabric', 'textile', 'soft', 'warm', 'wool', 'fur', 'material'],
-        'pillow': ['pillow', 'cushion', 'textile', 'fabric', 'bedding', 'soft', 'stuffing', 'comfort'],
-        'curtain': ['curtain', 'drape', 'textile', 'fabric', 'window', 'home', 'decor'],
-        'rug': ['rug', 'carpet', 'mat', 'floor', 'textile', 'fabric', 'home'],
+        // Home textiles - EXPANDED
+        'blanket': ['blanket', 'throw', 'textile', 'fabric', 'fleece', 'bedding', 'wool', 'woolen', 'fur', 'velvet', 'flannel', 'plush', 'soft', 'warm', 'cozy', 'quilt', 'comforter', 'duvet', 'cover', 'material', 'natural material', 'knit', 'cotton', 'polyester', 'sherpa', 'coral', 'fuzzy', 'fluffy'],
+        'throw': ['throw', 'blanket', 'textile', 'fabric', 'bedding', 'wool', 'fur', 'soft', 'cozy', 'plush', 'fuzzy', 'fluffy', 'warm'],
+        'fleece': ['fleece', 'blanket', 'fabric', 'textile', 'soft', 'warm', 'wool', 'fur', 'material', 'plush', 'fuzzy'],
+        'faux': ['faux', 'fake', 'synthetic', 'artificial', 'fur', 'leather', 'textile', 'fabric', 'material', 'plush', 'soft', 'fuzzy', 'fluffy'],
+        'fur': ['fur', 'faux', 'fuzzy', 'fluffy', 'plush', 'soft', 'textile', 'fabric', 'wool', 'fleece', 'blanket', 'throw', 'warm', 'cozy', 'animal', 'hair'],
+        'fuzzy': ['fuzzy', 'fluffy', 'plush', 'soft', 'fur', 'faux', 'textile', 'fabric', 'warm', 'cozy'],
+        'plush': ['plush', 'soft', 'fuzzy', 'fluffy', 'fur', 'textile', 'fabric', 'stuffed', 'toy', 'blanket'],
+        'pillow': ['pillow', 'cushion', 'textile', 'fabric', 'bedding', 'soft', 'stuffing', 'comfort', 'plush', 'decorative'],
+        'curtain': ['curtain', 'drape', 'textile', 'fabric', 'window', 'home', 'decor', 'sheer', 'blackout'],
+        'rug': ['rug', 'carpet', 'mat', 'floor', 'textile', 'fabric', 'home', 'area', 'runner', 'shag'],
+        'bedding': ['bedding', 'sheet', 'blanket', 'pillow', 'duvet', 'comforter', 'mattress', 'textile', 'fabric', 'bed'],
 
-        // Electronics
-        'led': ['led', 'light', 'lamp', 'lighting', 'bulb', 'strip', 'glow', 'bright', 'electric', 'wire', 'cable'],
-        'light': ['light', 'lamp', 'led', 'lighting', 'bulb', 'glow', 'bright', 'illumination'],
-        'phone': ['phone', 'mobile', 'smartphone', 'device', 'electronic', 'gadget', 'screen', 'case', 'cover'],
-        'cable': ['cable', 'wire', 'cord', 'charger', 'usb', 'electric', 'connector'],
-        'speaker': ['speaker', 'audio', 'sound', 'music', 'bluetooth', 'electronic'],
+        // Automotive - NEW
+        'car': ['car', 'auto', 'automobile', 'automotive', 'vehicle', 'motor', 'driving', 'wheel', 'tire', 'engine', 'hood', 'bumper', 'accessory', 'part', 'component'],
+        'parts': ['part', 'parts', 'component', 'piece', 'hardware', 'accessory', 'replacement', 'repair', 'automotive', 'car', 'auto', 'machine'],
+        'automotive': ['automotive', 'car', 'auto', 'vehicle', 'motor', 'engine', 'wheel', 'tire', 'accessory', 'part'],
+        'tire': ['tire', 'tyre', 'wheel', 'rubber', 'car', 'auto', 'vehicle', 'rim'],
+        'engine': ['engine', 'motor', 'car', 'auto', 'vehicle', 'mechanical', 'part', 'component'],
 
-        // Kitchen
-        'kitchen': ['kitchen', 'cookware', 'utensil', 'cooking', 'food', 'baking', 'tool', 'appliance'],
-        'cup': ['cup', 'mug', 'drinkware', 'ceramic', 'glass', 'coffee', 'tea', 'beverage'],
-        'plate': ['plate', 'dish', 'dinnerware', 'ceramic', 'tableware', 'food'],
+        // Electronics - EXPANDED
+        'led': ['led', 'light', 'lamp', 'lighting', 'bulb', 'strip', 'glow', 'bright', 'electric', 'wire', 'cable', 'neon', 'rgb'],
+        'light': ['light', 'lamp', 'led', 'lighting', 'bulb', 'glow', 'bright', 'illumination', 'chandelier', 'fixture'],
+        'phone': ['phone', 'mobile', 'smartphone', 'device', 'electronic', 'gadget', 'screen', 'case', 'cover', 'cell', 'iphone', 'android'],
+        'cable': ['cable', 'wire', 'cord', 'charger', 'usb', 'electric', 'connector', 'adapter', 'charging'],
+        'speaker': ['speaker', 'audio', 'sound', 'music', 'bluetooth', 'electronic', 'stereo', 'portable'],
+        'earphone': ['earphone', 'headphone', 'earbud', 'audio', 'music', 'wireless', 'bluetooth', 'sound'],
+        'charger': ['charger', 'charging', 'cable', 'usb', 'power', 'adapter', 'battery', 'wireless'],
 
-        // Pets
-        'dog': ['dog', 'pet', 'animal', 'canine', 'puppy', 'collar', 'leash', 'toy'],
-        'cat': ['cat', 'pet', 'animal', 'feline', 'kitten', 'toy'],
-        'pet': ['pet', 'animal', 'dog', 'cat', 'toy', 'collar', 'leash', 'bowl'],
+        // Kitchen - EXPANDED
+        'kitchen': ['kitchen', 'cookware', 'utensil', 'cooking', 'food', 'baking', 'tool', 'appliance', 'gadget', 'chef'],
+        'cup': ['cup', 'mug', 'drinkware', 'ceramic', 'glass', 'coffee', 'tea', 'beverage', 'tumbler'],
+        'plate': ['plate', 'dish', 'dinnerware', 'ceramic', 'tableware', 'food', 'bowl', 'serving'],
+        'bottle': ['bottle', 'water', 'drink', 'container', 'flask', 'thermos', 'beverage', 'glass', 'plastic'],
+        'knife': ['knife', 'blade', 'cutting', 'kitchen', 'chef', 'utensil', 'tool', 'steel', 'sharp'],
+        'pot': ['pot', 'pan', 'cookware', 'cooking', 'kitchen', 'stainless', 'nonstick', 'lid'],
 
-        // Toys & Kids
-        'toy': ['toy', 'play', 'game', 'fun', 'child', 'kid', 'baby', 'stuffed', 'plush'],
-        'baby': ['baby', 'infant', 'child', 'kid', 'nursery', 'toddler'],
+        // Pets - EXPANDED
+        'dog': ['dog', 'pet', 'animal', 'canine', 'puppy', 'collar', 'leash', 'toy', 'bone', 'treat', 'bowl'],
+        'cat': ['cat', 'pet', 'animal', 'feline', 'kitten', 'toy', 'litter', 'scratching', 'mouse'],
+        'pet': ['pet', 'animal', 'dog', 'cat', 'toy', 'collar', 'leash', 'bowl', 'food', 'treat', 'bed'],
 
-        // Clothing (if user wants clothing)
-        'shirt': ['shirt', 'clothing', 'apparel', 'top', 'garment', 'textile', 'fabric', 'fashion'],
-        'dress': ['dress', 'clothing', 'apparel', 'garment', 'fashion', 'textile'],
-        'shoe': ['shoe', 'footwear', 'sneaker', 'boot', 'sandal', 'sole', 'leather'],
+        // Toys & Kids - EXPANDED
+        'toy': ['toy', 'play', 'game', 'fun', 'child', 'kid', 'baby', 'stuffed', 'plush', 'action', 'figure', 'doll'],
+        'baby': ['baby', 'infant', 'child', 'kid', 'nursery', 'toddler', 'newborn', 'diaper', 'bottle', 'stroller'],
+        'game': ['game', 'toy', 'play', 'board', 'card', 'puzzle', 'fun', 'entertainment', 'video'],
 
-        // Jewelry & Accessories
-        'jewelry': ['jewelry', 'jewellery', 'accessory', 'ring', 'necklace', 'bracelet', 'earring', 'gold', 'silver'],
-        'watch': ['watch', 'timepiece', 'wrist', 'clock', 'accessory', 'band', 'strap'],
-        'bag': ['bag', 'handbag', 'purse', 'backpack', 'luggage', 'pouch', 'case'],
+        // Clothing - EXPANDED
+        'shirt': ['shirt', 'clothing', 'apparel', 'top', 'garment', 'textile', 'fabric', 'fashion', 'tshirt', 'blouse'],
+        'dress': ['dress', 'clothing', 'apparel', 'garment', 'fashion', 'textile', 'gown', 'skirt', 'woman'],
+        'shoe': ['shoe', 'footwear', 'sneaker', 'boot', 'sandal', 'sole', 'leather', 'heel', 'slipper', 'loafer'],
+        'pants': ['pants', 'jeans', 'trousers', 'clothing', 'apparel', 'denim', 'legging', 'shorts'],
+        'jacket': ['jacket', 'coat', 'clothing', 'outerwear', 'hoodie', 'sweater', 'cardigan', 'blazer'],
+        'sock': ['sock', 'socks', 'hosiery', 'foot', 'ankle', 'clothing', 'cotton', 'warm'],
 
-        // Beauty
-        'makeup': ['makeup', 'cosmetic', 'beauty', 'lipstick', 'brush', 'powder'],
-        'skincare': ['skincare', 'cream', 'lotion', 'beauty', 'face', 'skin'],
+        // Jewelry & Accessories - EXPANDED
+        'jewelry': ['jewelry', 'jewellery', 'accessory', 'ring', 'necklace', 'bracelet', 'earring', 'gold', 'silver', 'pendant', 'chain'],
+        'watch': ['watch', 'timepiece', 'wrist', 'clock', 'accessory', 'band', 'strap', 'smart', 'digital', 'analog'],
+        'bag': ['bag', 'handbag', 'purse', 'backpack', 'luggage', 'pouch', 'case', 'tote', 'shoulder', 'crossbody'],
+        'sunglasses': ['sunglasses', 'glasses', 'eyewear', 'shades', 'accessory', 'frame', 'lens', 'uv'],
+        'hat': ['hat', 'cap', 'beanie', 'headwear', 'accessory', 'baseball', 'sun', 'winter'],
+        'scarf': ['scarf', 'shawl', 'wrap', 'accessory', 'textile', 'fabric', 'neck', 'winter', 'warm'],
 
-        // Tools & Hardware
-        'tool': ['tool', 'hardware', 'drill', 'wrench', 'screwdriver', 'equipment'],
+        // Beauty - EXPANDED
+        'makeup': ['makeup', 'cosmetic', 'beauty', 'lipstick', 'brush', 'powder', 'foundation', 'mascara', 'eyeshadow'],
+        'skincare': ['skincare', 'cream', 'lotion', 'beauty', 'face', 'skin', 'serum', 'moisturizer', 'cleanser'],
+        'hair': ['hair', 'brush', 'comb', 'dryer', 'styling', 'shampoo', 'conditioner', 'beauty', 'salon'],
+        'nail': ['nail', 'manicure', 'polish', 'gel', 'beauty', 'art', 'tool', 'file', 'clipper'],
 
-        // Sports & Outdoor
-        'sport': ['sport', 'fitness', 'exercise', 'gym', 'athletic', 'outdoor'],
-        'camping': ['camping', 'outdoor', 'tent', 'hiking', 'adventure', 'nature']
+        // Tools & Hardware - EXPANDED
+        'tool': ['tool', 'hardware', 'drill', 'wrench', 'screwdriver', 'equipment', 'hammer', 'plier', 'measure', 'repair'],
+        'screw': ['screw', 'bolt', 'nut', 'fastener', 'hardware', 'tool', 'metal', 'mounting'],
+        'drill': ['drill', 'tool', 'bit', 'power', 'electric', 'cordless', 'hardware', 'hole'],
+
+        // Sports & Outdoor - EXPANDED
+        'sport': ['sport', 'fitness', 'exercise', 'gym', 'athletic', 'outdoor', 'training', 'workout', 'running'],
+        'camping': ['camping', 'outdoor', 'tent', 'hiking', 'adventure', 'nature', 'survival', 'backpack', 'flashlight'],
+        'fishing': ['fishing', 'fish', 'rod', 'reel', 'bait', 'hook', 'line', 'tackle', 'outdoor', 'water'],
+        'yoga': ['yoga', 'mat', 'fitness', 'exercise', 'stretch', 'meditation', 'pilates', 'workout'],
+        'bicycle': ['bicycle', 'bike', 'cycling', 'wheel', 'pedal', 'helmet', 'sport', 'outdoor', 'ride'],
+
+        // Garden & Home - NEW
+        'garden': ['garden', 'plant', 'flower', 'pot', 'outdoor', 'green', 'lawn', 'yard', 'landscaping', 'soil'],
+        'plant': ['plant', 'flower', 'pot', 'garden', 'green', 'leaf', 'seed', 'grow', 'indoor', 'outdoor'],
+        'decor': ['decor', 'decoration', 'home', 'wall', 'art', 'ornament', 'interior', 'design', 'style'],
+        'storage': ['storage', 'box', 'container', 'organizer', 'bin', 'basket', 'shelf', 'holder', 'rack'],
+        'cleaning': ['cleaning', 'brush', 'mop', 'bucket', 'wipe', 'cloth', 'sponge', 'detergent', 'household'],
+
+        // Office & Stationery - NEW
+        'office': ['office', 'desk', 'chair', 'stationery', 'pen', 'paper', 'file', 'organize', 'work'],
+        'pen': ['pen', 'pencil', 'marker', 'writing', 'stationery', 'ink', 'office', 'school'],
+        'notebook': ['notebook', 'book', 'journal', 'diary', 'paper', 'writing', 'note', 'stationery']
       };
 
       // Build valid categories from search term
