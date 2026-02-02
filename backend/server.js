@@ -3,7 +3,7 @@ const path = require('path');
 const axios = require('axios');
 const fs = require('fs');
 const { searchCJProducts, getCJCategories, cancelScrape, generateScrapeId, MAX_OFFSET } = require('./cj-api-scraper');
-const { getCategoryIndex, searchCategories } = require('./category-service');
+const { getCategoryIndex, searchCategories, isValidCategoryId, getCategoryById } = require('./category-service');
 const { mapSearchToCategories, generateDynamicKeywords, clearCache: clearKeywordCache } = require('./ai-keyword-generator');
 
 // Gemini API Key for dynamic keyword generation
@@ -401,11 +401,47 @@ app.post('/api/scrape', async (req, res) => {
       throw new Error('Scrape cancelled by user');
     }
 
-    // DEBUG: Log filters being passed to CJ API
+    // ========================================
+    // CATEGORY VALIDATION: Check if URL id is a valid category
+    // ========================================
+    let validatedCategoryId = null;
+    let categoryInfo = null;
+    const urlCategoryId = filters.categoryId || filters.id;
+
+    if (urlCategoryId) {
+      try {
+        // Fetch category tree from CJ
+        const categoryData = await getCategoryIndex(CJ_API_TOKEN);
+
+        // Validate the category ID
+        if (isValidCategoryId(urlCategoryId, categoryData)) {
+          validatedCategoryId = urlCategoryId;
+          categoryInfo = getCategoryById(urlCategoryId, categoryData);
+          console.log('[Category] ✓ Valid category found:', {
+            id: validatedCategoryId,
+            name: categoryInfo?.name || 'Unknown',
+            level: categoryInfo?.level || 'Unknown',
+            path: categoryInfo?.path || 'Unknown'
+          });
+        } else {
+          console.warn('[Category] ✗ Invalid category ID from URL:', urlCategoryId);
+          console.log('[Category] This may be a search filter or session ID, not a category');
+          console.log('[Category] Proceeding WITHOUT category filter');
+        }
+      } catch (error) {
+        console.error('[Category] Failed to validate category:', error.message);
+        console.log('[Category] Proceeding WITHOUT category filter due to error');
+      }
+    } else {
+      console.log('[Category] No category ID in URL filters');
+    }
+
+    // DEBUG: Log filters being passed to CJ API  
     console.log('[DEBUG] Filters being passed:', {
       startWarehouseInventory: filters.startWarehouseInventory,
       endWarehouseInventory: filters.endWarehouseInventory,
-      verifiedWarehouse: filters.verifiedWarehouse
+      verifiedWarehouse: filters.verifiedWarehouse,
+      categoryId: validatedCategoryId || 'NONE (not validated or invalid)'
     });
 
     // FIXED: Fetch ALL pages (up to MAX_OFFSET limit)
@@ -413,10 +449,10 @@ app.post('/api/scrape', async (req, res) => {
       pageNum: 1,
       pageSize: 200, // Max allowed by CJ API
       verifiedWarehouse: filters.verifiedWarehouse,
-      categoryId: filters.categoryId || null, // Only use explicit categoryId, NOT url 'id' param
-      startWarehouseInventory: filters.startWarehouseInventory || null, // BUG FIX: Pass inventory filters
-      endWarehouseInventory: filters.endWarehouseInventory || null, // BUG FIX: Pass inventory filters
-      fetchAllPages: true, // Fetch all pages up to MAX_OFFSET
+      categoryId: validatedCategoryId, // Only use VALIDATED category ID
+      startWarehouseInventory: filters.startWarehouseInventory || null,
+      endWarehouseInventory: filters.endWarehouseInventory || null,
+      fetchAllPages: true,
       scrapeId: scrapeId
     });
 

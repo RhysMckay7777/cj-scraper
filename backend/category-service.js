@@ -39,37 +39,74 @@ async function fetchCategoriesFromAPI(cjToken) {
 
 /**
  * Build searchable category index from raw category tree
- * Creates a flat index with all Level 3 categories searchable by name
+ * Creates multiple indexes for searching and validation
  * @param {Array} categories - Raw category tree from CJ API
- * @returns {Object} Searchable index { categoryName: { id, fullPath, level1, level2, level3 } }
+ * @returns {Object} Searchable index with multiple lookup methods
  */
 function buildCategoryIndex(categories) {
-    const index = {};
+    const index = {};       // categoryName -> category info
+    const byId = {};        // categoryId -> category info
+    const allIds = new Set(); // Set of all valid category IDs
     let totalCategories = 0;
 
     for (const level1 of categories) {
+        // Also store level 1 category
+        if (level1.categoryFirstId) {
+            byId[level1.categoryFirstId] = {
+                categoryId: level1.categoryFirstId,
+                name: level1.categoryFirstName,
+                level: 1,
+                path: level1.categoryFirstName
+            };
+            allIds.add(level1.categoryFirstId);
+        }
+
         if (!level1.categoryFirstList) continue;
 
         for (const level2 of level1.categoryFirstList) {
+            // Store level 2 category
+            if (level2.categorySecondId) {
+                byId[level2.categorySecondId] = {
+                    categoryId: level2.categorySecondId,
+                    name: level2.categorySecondName,
+                    level: 2,
+                    path: `${level1.categoryFirstName} > ${level2.categorySecondName}`,
+                    parentId: level1.categoryFirstId
+                };
+                allIds.add(level2.categorySecondId);
+            }
+
             if (!level2.categorySecondList) continue;
 
             for (const level3 of level2.categorySecondList) {
                 const key = level3.categoryName.toLowerCase().trim();
+                const fullPath = `${level1.categoryFirstName} > ${level2.categorySecondName} > ${level3.categoryName}`;
 
+                // Store in name index
                 index[key] = {
                     categoryId: level3.categoryId,
-                    fullPath: `${level1.categoryFirstName} > ${level2.categorySecondName} > ${level3.categoryName}`,
+                    fullPath: fullPath,
                     level1: level1.categoryFirstName,
                     level2: level2.categorySecondName,
                     level3: level3.categoryName
                 };
+
+                // Store in ID index
+                byId[level3.categoryId] = {
+                    categoryId: level3.categoryId,
+                    name: level3.categoryName,
+                    level: 3,
+                    path: fullPath,
+                    parentId: level2.categorySecondId
+                };
+                allIds.add(level3.categoryId);
                 totalCategories++;
             }
         }
     }
 
-    console.log(`[Category Service] Built index with ${totalCategories} searchable categories`);
-    return index;
+    console.log(`[Category Service] Built index with ${totalCategories} level-3 categories, ${allIds.size} total IDs`);
+    return { index, byId, allIds };
 }
 
 /**
@@ -111,23 +148,73 @@ async function cacheCategories(data) {
 /**
  * Get category index (from cache or API)
  * @param {string} cjToken - CJ API access token
- * @returns {Promise<Object>} { raw: Array, index: Object }
+ * @returns {Promise<Object>} { raw: Array, index: Object, byId: Object, allIds: Set }
  */
 async function getCategoryIndex(cjToken) {
     // Try cache first
     const cached = await getCachedCategories();
     if (cached) {
+        // Convert allIds back to Set if it was serialized as array
+        if (cached.allIds && Array.isArray(cached.allIds)) {
+            cached.allIds = new Set(cached.allIds);
+        }
         return cached;
     }
 
     // Fetch from API
     const raw = await fetchCategoriesFromAPI(cjToken);
-    const index = buildCategoryIndex(raw);
+    const { index, byId, allIds } = buildCategoryIndex(raw);
 
-    const data = { raw, index, fetchedAt: new Date().toISOString() };
+    // Convert Set to Array for JSON serialization
+    const data = {
+        raw,
+        index,
+        byId,
+        allIds: Array.from(allIds),
+        fetchedAt: new Date().toISOString()
+    };
     await cacheCategories(data);
 
-    return data;
+    // Return with Set
+    return { raw, index, byId, allIds };
+}
+
+/**
+ * Check if a category ID is valid (exists in CJ category tree)
+ * @param {string} categoryId - The ID to validate
+ * @param {Object} categoryData - Data from getCategoryIndex()
+ * @returns {boolean} True if valid
+ */
+function isValidCategoryId(categoryId, categoryData) {
+    if (!categoryId || !categoryData) return false;
+
+    // Check byId map
+    if (categoryData.byId && categoryData.byId[categoryId]) {
+        return true;
+    }
+
+    // Check allIds Set
+    if (categoryData.allIds) {
+        if (categoryData.allIds instanceof Set) {
+            return categoryData.allIds.has(categoryId);
+        }
+        if (Array.isArray(categoryData.allIds)) {
+            return categoryData.allIds.includes(categoryId);
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Get category info by ID
+ * @param {string} categoryId - The category ID
+ * @param {Object} categoryData - Data from getCategoryIndex()
+ * @returns {Object|null} Category info or null if not found
+ */
+function getCategoryById(categoryId, categoryData) {
+    if (!categoryId || !categoryData || !categoryData.byId) return null;
+    return categoryData.byId[categoryId] || null;
 }
 
 /**
@@ -207,5 +294,7 @@ module.exports = {
     getCategoryIndex,
     searchCategories,
     getCategoryNames,
+    isValidCategoryId,
+    getCategoryById,
     test
 };
