@@ -95,13 +95,6 @@ app.use((req, res, next) => {
 // VERY RELAXED text filter - let image detection do the heavy lifting
 // Just need AT LEAST ONE search word to match - Vision API will filter out bad matches
 function isRelevantProduct(productTitle, searchTerm) {
-  // DEBUG: Log first 3 calls to trace the issue
-  if (!isRelevantProduct.debugCount) isRelevantProduct.debugCount = 0;
-  if (isRelevantProduct.debugCount < 3) {
-    console.log(`[DEBUG isRelevantProduct] productTitle="${productTitle?.substring(0, 50) || 'EMPTY'}", searchTerm="${searchTerm}"`);
-    isRelevantProduct.debugCount++;
-  }
-
   const lowerTitle = (productTitle || '').toLowerCase();
   const lowerSearch = (searchTerm || '').toLowerCase();
 
@@ -377,13 +370,20 @@ app.post('/api/scrape', async (req, res) => {
     console.log(`[${requestId}] Scrape ID: ${scrapeId}`);
 
     // Parse search term and filters from URL if provided
+    // BUGFIX: Check BOTH searchUrl and searchTerm for CJ URLs (frontend may pass URL as searchTerm)
     let keyword = searchTerm || searchUrl;
     let filters = {};
 
-    if (searchUrl && searchUrl.includes('cjdropshipping.com')) {
-      const parsed = parseCJUrl(searchUrl);
+    // Check if searchUrl OR searchTerm contains a CJ URL
+    const urlToParse = (searchUrl && searchUrl.includes('cjdropshipping.com')) ? searchUrl
+      : (searchTerm && searchTerm.includes('cjdropshipping.com')) ? searchTerm
+        : null;
+
+    if (urlToParse) {
+      const parsed = parseCJUrl(urlToParse);
       keyword = parsed.keyword;
       filters = parsed.filters;
+      console.log('Parsed URL:', { keyword, filters });
     }
 
     // Check for cancellation
@@ -391,12 +391,19 @@ app.post('/api/scrape', async (req, res) => {
       throw new Error('Scrape cancelled by user');
     }
 
+    // DEBUG: Log filters being passed to CJ API
+    console.log('[DEBUG] Filters being passed:', {
+      startWarehouseInventory: filters.startWarehouseInventory,
+      endWarehouseInventory: filters.endWarehouseInventory,
+      verifiedWarehouse: filters.verifiedWarehouse
+    });
+
     // FIXED: Fetch ALL pages (up to MAX_OFFSET limit)
     const apiResult = await searchCJProducts(keyword, CJ_API_TOKEN, {
       pageNum: 1,
       pageSize: 200, // Max allowed by CJ API
       verifiedWarehouse: filters.verifiedWarehouse,
-      categoryId: filters.categoryId || filters.id || null, // Support category filtering (CJ website uses 'id' param)
+      categoryId: filters.categoryId || null, // Only use explicit categoryId, NOT url 'id' param
       startWarehouseInventory: filters.startWarehouseInventory || null, // BUG FIX: Pass inventory filters
       endWarehouseInventory: filters.endWarehouseInventory || null, // BUG FIX: Pass inventory filters
       fetchAllPages: true, // Fetch all pages up to MAX_OFFSET
