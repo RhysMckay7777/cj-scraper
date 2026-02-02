@@ -721,7 +721,11 @@ app.post('/api/upload-shopify', async (req, res) => {
 
   // GraphQL batch configuration
   const BATCH_SIZE = 30; // 30 products per GraphQL request (optimized for speed)
-  const GRAPHQL_ENDPOINT = `https://${shopifyStore}/admin/api/2026-01/graphql.json`;
+
+  // FIX: Strip any existing protocol from the store URL
+  const cleanStoreUrl = shopifyStore.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+  const GRAPHQL_ENDPOINT = `https://${cleanStoreUrl}/admin/api/2026-01/graphql.json`;
+  console.log(`[${requestId}] Using Shopify endpoint: ${GRAPHQL_ENDPOINT}`);
 
   // Helper: Build productSet input for GraphQL variables
   const buildProductSetInput = (product) => {
