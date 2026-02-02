@@ -2,6 +2,40 @@ const axios = require('axios');
 
 const CJ_API_BASE = 'https://developers.cjdropshipping.com/api2.0/v1';
 
+// CJ API has a hard limit of 6000 max offset
+const MAX_OFFSET = 6000;
+
+// Track active scrape sessions for cancellation
+const activeScrapes = new Map();
+
+/**
+ * Generate a unique scrape session ID
+ */
+function generateScrapeId() {
+  return `scrape_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
+
+/**
+ * Cancel an active scrape session
+ */
+function cancelScrape(scrapeId) {
+  if (activeScrapes.has(scrapeId)) {
+    activeScrapes.get(scrapeId).cancelled = true;
+    activeScrapes.delete(scrapeId);
+    console.log(`[CJ API] Scrape ${scrapeId} cancelled`);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Check if a scrape is cancelled
+ */
+function isCancelled(scrapeId) {
+  const session = activeScrapes.get(scrapeId);
+  return session ? session.cancelled : false;
+}
+
 /**
  * Search CJ products using their official API
  * Uses /product/list for exact keyword matching (not elasticsearch)
@@ -16,7 +50,8 @@ async function searchCJProducts(searchTerm, cjToken, options = {}) {
       pageSize = 100,
       verifiedWarehouse = null,
       categoryId = null,
-      fetchAllPages = false // NEW: option to fetch all pages
+      fetchAllPages = false, // Option to fetch all pages
+      scrapeId = null // For cancellation support
     } = options;
 
     console.log(`[CJ API] Searching for: "${searchTerm}" (page ${pageNum})`);
@@ -96,29 +131,56 @@ async function searchCJProducts(searchTerm, cjToken, options = {}) {
       };
     });
 
-    // NEW: Fetch all pages if requested
+    // NEW: Fetch all pages if requested (with offset limit protection)
     if (fetchAllPages && totalPages > 1) {
-      console.log(`[CJ API] Fetching remaining ${totalPages - 1} pages...`);
+      // Calculate max pages we can actually fetch due to offset limit
+      const maxFetchablePages = Math.floor(MAX_OFFSET / apiPageSize);
+      const actualMaxPages = Math.min(totalPages, maxFetchablePages);
 
-      for (let page = 2; page <= totalPages; page++) {
+      if (totalPages > maxFetchablePages) {
+        console.log(`[CJ API] ⚠️ Total ${totalPages} pages exceeds API limit. Can only fetch ${maxFetchablePages} pages (offset limit: ${MAX_OFFSET})`);
+      }
+
+      console.log(`[CJ API] Fetching remaining ${actualMaxPages - 1} pages...`);
+
+      // Register this scrape session for cancellation support
+      const sessionId = scrapeId || generateScrapeId();
+      activeScrapes.set(sessionId, { cancelled: false, startedAt: Date.now() });
+
+      for (let page = 2; page <= actualMaxPages; page++) {
+        // Check for cancellation
+        if (isCancelled(sessionId)) {
+          console.log(`[CJ API] ⛔ Scrape cancelled at page ${page}/${actualMaxPages}`);
+          break;
+        }
+
         // Add delay to avoid rate limiting (CJ API limit: 1 request per second)
         await new Promise(resolve => setTimeout(resolve, 1100));
 
         const nextPageResult = await searchCJProducts(searchTerm, cjToken, {
           ...options,
           pageNum: page,
-          fetchAllPages: false // Don't recurse infinitely
+          fetchAllPages: false, // Don't recurse infinitely
+          scrapeId: sessionId
         });
 
         if (nextPageResult.success) {
           products = products.concat(nextPageResult.products);
-          console.log(`[CJ API] Fetched page ${page}/${totalPages} - Total products so far: ${products.length}`);
+          console.log(`[CJ API] Fetched page ${page}/${actualMaxPages} - Total products so far: ${products.length}`);
         } else {
           console.error(`[CJ API] Failed to fetch page ${page}: ${nextPageResult.error}`);
+          // If we hit the offset error, stop fetching
+          if (nextPageResult.error && nextPageResult.error.includes('max offset')) {
+            console.log(`[CJ API] ⛔ Hit max offset limit, stopping pagination`);
+            break;
+          }
         }
       }
 
-      console.log(`[CJ API] ✅ Fetched all ${totalPages} pages - Total: ${products.length} products`);
+      // Cleanup session
+      activeScrapes.delete(sessionId);
+
+      console.log(`[CJ API] ✅ Fetched ${Math.min(actualMaxPages, totalPages)} pages - Total: ${products.length} products`);
     }
 
     return {
@@ -128,7 +190,9 @@ async function searchCJProducts(searchTerm, cjToken, options = {}) {
       actualFetched: products.length, // Actual count fetched (may differ from total)
       currentPage: pageNum,
       totalPages: totalPages,
-      fetchedPages: fetchAllPages ? totalPages : 1
+      maxFetchablePages: Math.floor(MAX_OFFSET / apiPageSize),
+      fetchedPages: fetchAllPages ? Math.min(totalPages, Math.floor(MAX_OFFSET / apiPageSize)) : 1,
+      scrapeId: options.scrapeId || null
     };
 
   } catch (error) {
@@ -224,5 +288,8 @@ async function getCJCategories(cjToken) {
 
 module.exports = {
   searchCJProducts,
-  getCJCategories
+  getCJCategories,
+  cancelScrape,
+  generateScrapeId,
+  MAX_OFFSET
 };

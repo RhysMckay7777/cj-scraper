@@ -2,7 +2,10 @@ const express = require('express');
 const path = require('path');
 const axios = require('axios');
 const fs = require('fs');
-const { searchCJProducts, getCJCategories } = require('./cj-api-scraper');
+const { searchCJProducts, getCJCategories, cancelScrape, generateScrapeId, MAX_OFFSET } = require('./cj-api-scraper');
+
+// Track active scrape sessions for cancellation
+const activeScrapes = new Map();
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -98,7 +101,35 @@ function parseCJUrl(url) {
   }
 }
 
+// Retry wrapper with exponential backoff
+async function withRetry(fn, maxRetries = 3, baseDelayMs = 1000) {
+  let lastError;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      const isRetryable = error.code === 'ECONNRESET' ||
+        error.code === 'ETIMEDOUT' ||
+        error.code === 'ECONNREFUSED' ||
+        error.message?.includes('timeout') ||
+        error.message?.includes('429') ||
+        (error.response?.status >= 500);
+
+      if (!isRetryable || attempt === maxRetries) {
+        throw error;
+      }
+
+      const delay = baseDelayMs * Math.pow(2, attempt - 1);
+      console.log(`  ⚠️ Retry ${attempt}/${maxRetries} after ${delay}ms: ${error.message}`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  throw lastError;
+}
+
 // Analyze image with Google Vision API - DYNAMIC category detection
+// Now includes retry logic for transient errors
 async function analyzeProductImage(imageUrl, searchTerm) {
   try {
     if (!GOOGLE_VISION_API_KEY && !process.env.GOOGLE_APPLICATION_CREDENTIALS && !GOOGLE_CREDENTIALS_JSON) {
@@ -106,151 +137,154 @@ async function analyzeProductImage(imageUrl, searchTerm) {
       return true; // Default pass if no credentials
     }
 
-    // Download image first
-    const response = await axios.get(imageUrl, {
-      responseType: 'arraybuffer',
-      timeout: 10000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      }
-    });
-
-    const imageBuffer = Buffer.from(response.data);
-    const base64Image = imageBuffer.toString('base64');
-
-    let labels = [];
-
-    // Try service account first, fallback to API key
-    if (process.env.GOOGLE_APPLICATION_CREDENTIALS || GOOGLE_CREDENTIALS_JSON) {
-      // Use @google-cloud/vision SDK
-      const vision = require('@google-cloud/vision');
-      const client = new vision.ImageAnnotatorClient();
-
-      const [result] = await client.labelDetection({
-        image: { content: imageBuffer }
-      });
-
-      labels = result.labelAnnotations || [];
-    } else if (GOOGLE_VISION_API_KEY) {
-      // Use REST API with API key
-      const visionResponse = await axios.post(
-        `https://vision.googleapis.com/v1/images:annotate?key=${GOOGLE_VISION_API_KEY}`,
-        {
-          requests: [{
-            image: { content: base64Image },
-            features: [{ type: 'LABEL_DETECTION', maxResults: 15 }]
-          }]
-        },
-        { timeout: 15000 }
-      );
-
-      labels = visionResponse.data.responses[0]?.labelAnnotations || [];
-    }
-
-    const detectedLabels = labels.map(l => l.description.toLowerCase());
-
-    // ===========================================
-    // DYNAMIC CATEGORY DETECTION
-    // ===========================================
-    // Build valid categories from the search term DYNAMICALLY
-    const searchLower = searchTerm.toLowerCase();
-    const searchWords = searchLower.split(/[\s+]+/).filter(w => w.length > 2);
-
-    // Semantic keyword expansions - maps keywords to related valid labels
-    const keywordExpansions = {
-      // Home textiles
-      'blanket': ['blanket', 'throw', 'textile', 'fabric', 'fleece', 'bedding', 'wool', 'woolen', 'fur', 'velvet', 'flannel', 'plush', 'soft', 'warm', 'cozy', 'quilt', 'comforter', 'duvet', 'cover', 'material', 'natural material', 'knit', 'cotton', 'polyester', 'sherpa', 'coral'],
-      'throw': ['throw', 'blanket', 'textile', 'fabric', 'bedding', 'wool', 'fur', 'soft', 'cozy'],
-      'fleece': ['fleece', 'blanket', 'fabric', 'textile', 'soft', 'warm', 'wool', 'fur', 'material'],
-      'pillow': ['pillow', 'cushion', 'textile', 'fabric', 'bedding', 'soft', 'stuffing', 'comfort'],
-      'curtain': ['curtain', 'drape', 'textile', 'fabric', 'window', 'home', 'decor'],
-      'rug': ['rug', 'carpet', 'mat', 'floor', 'textile', 'fabric', 'home'],
-
-      // Electronics
-      'led': ['led', 'light', 'lamp', 'lighting', 'bulb', 'strip', 'glow', 'bright', 'electric', 'wire', 'cable'],
-      'light': ['light', 'lamp', 'led', 'lighting', 'bulb', 'glow', 'bright', 'illumination'],
-      'phone': ['phone', 'mobile', 'smartphone', 'device', 'electronic', 'gadget', 'screen', 'case', 'cover'],
-      'cable': ['cable', 'wire', 'cord', 'charger', 'usb', 'electric', 'connector'],
-      'speaker': ['speaker', 'audio', 'sound', 'music', 'bluetooth', 'electronic'],
-
-      // Kitchen
-      'kitchen': ['kitchen', 'cookware', 'utensil', 'cooking', 'food', 'baking', 'tool', 'appliance'],
-      'cup': ['cup', 'mug', 'drinkware', 'ceramic', 'glass', 'coffee', 'tea', 'beverage'],
-      'plate': ['plate', 'dish', 'dinnerware', 'ceramic', 'tableware', 'food'],
-
-      // Pets
-      'dog': ['dog', 'pet', 'animal', 'canine', 'puppy', 'collar', 'leash', 'toy'],
-      'cat': ['cat', 'pet', 'animal', 'feline', 'kitten', 'toy'],
-      'pet': ['pet', 'animal', 'dog', 'cat', 'toy', 'collar', 'leash', 'bowl'],
-
-      // Toys & Kids
-      'toy': ['toy', 'play', 'game', 'fun', 'child', 'kid', 'baby', 'stuffed', 'plush'],
-      'baby': ['baby', 'infant', 'child', 'kid', 'nursery', 'toddler'],
-
-      // Clothing (if user wants clothing)
-      'shirt': ['shirt', 'clothing', 'apparel', 'top', 'garment', 'textile', 'fabric', 'fashion'],
-      'dress': ['dress', 'clothing', 'apparel', 'garment', 'fashion', 'textile'],
-      'shoe': ['shoe', 'footwear', 'sneaker', 'boot', 'sandal', 'sole', 'leather'],
-
-      // Jewelry & Accessories
-      'jewelry': ['jewelry', 'jewellery', 'accessory', 'ring', 'necklace', 'bracelet', 'earring', 'gold', 'silver'],
-      'watch': ['watch', 'timepiece', 'wrist', 'clock', 'accessory', 'band', 'strap'],
-      'bag': ['bag', 'handbag', 'purse', 'backpack', 'luggage', 'pouch', 'case'],
-
-      // Beauty
-      'makeup': ['makeup', 'cosmetic', 'beauty', 'lipstick', 'brush', 'powder'],
-      'skincare': ['skincare', 'cream', 'lotion', 'beauty', 'face', 'skin'],
-
-      // Tools & Hardware
-      'tool': ['tool', 'hardware', 'drill', 'wrench', 'screwdriver', 'equipment'],
-
-      // Sports & Outdoor
-      'sport': ['sport', 'fitness', 'exercise', 'gym', 'athletic', 'outdoor'],
-      'camping': ['camping', 'outdoor', 'tent', 'hiking', 'adventure', 'nature']
-    };
-
-    // Build valid categories from search term
-    let validCategories = new Set();
-
-    // Add exact search words
-    searchWords.forEach(word => {
-      validCategories.add(word);
-
-      // Expand with related terms
-      if (keywordExpansions[word]) {
-        keywordExpansions[word].forEach(related => validCategories.add(related));
-      }
-
-      // Also check partial matches
-      Object.keys(keywordExpansions).forEach(key => {
-        if (word.includes(key) || key.includes(word)) {
-          keywordExpansions[key].forEach(related => validCategories.add(related));
+    // Use retry wrapper for the entire operation
+    return await withRetry(async () => {
+      // Download image first
+      const response = await axios.get(imageUrl, {
+        responseType: 'arraybuffer',
+        timeout: 15000, // Increased timeout
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
       });
-    });
 
-    const validCategoriesArray = Array.from(validCategories);
+      const imageBuffer = Buffer.from(response.data);
+      const base64Image = imageBuffer.toString('base64');
 
-    // NOTE: Reject labels feature removed - caused too many false negatives
-    // Vision's positive matching alone is sufficient (86% accuracy)
+      let labels = [];
 
-    // Check if any detected label matches our dynamic valid categories
-    const hasValidMatch = detectedLabels.some(label =>
-      validCategoriesArray.some(valid =>
-        label.includes(valid) || valid.includes(label)
-      )
-    );
+      // Try service account first, fallback to API key
+      if (process.env.GOOGLE_APPLICATION_CREDENTIALS || GOOGLE_CREDENTIALS_JSON) {
+        // Use @google-cloud/vision SDK
+        const vision = require('@google-cloud/vision');
+        const client = new vision.ImageAnnotatorClient();
 
-    // Also check direct search term match in labels
-    const hasSearchTermMatch = searchWords.some(word =>
-      detectedLabels.some(label => label.includes(word) || word.includes(label))
-    );
+        const [result] = await client.labelDetection({
+          image: { content: imageBuffer }
+        });
 
-    if (hasValidMatch || hasSearchTermMatch) {
-      return true;
-    }
+        labels = result.labelAnnotations || [];
+      } else if (GOOGLE_VISION_API_KEY) {
+        // Use REST API with API key
+        const visionResponse = await axios.post(
+          `https://vision.googleapis.com/v1/images:annotate?key=${GOOGLE_VISION_API_KEY}`,
+          {
+            requests: [{
+              image: { content: base64Image },
+              features: [{ type: 'LABEL_DETECTION', maxResults: 15 }]
+            }]
+          },
+          { timeout: 15000 }
+        );
 
-    return false;
+        labels = visionResponse.data.responses[0]?.labelAnnotations || [];
+      }
+
+      const detectedLabels = labels.map(l => l.description.toLowerCase());
+
+      // ===========================================
+      // DYNAMIC CATEGORY DETECTION
+      // ===========================================
+      // Build valid categories from the search term DYNAMICALLY
+      const searchLower = searchTerm.toLowerCase();
+      const searchWords = searchLower.split(/[\s+]+/).filter(w => w.length > 2);
+
+      // Semantic keyword expansions - maps keywords to related valid labels
+      const keywordExpansions = {
+        // Home textiles
+        'blanket': ['blanket', 'throw', 'textile', 'fabric', 'fleece', 'bedding', 'wool', 'woolen', 'fur', 'velvet', 'flannel', 'plush', 'soft', 'warm', 'cozy', 'quilt', 'comforter', 'duvet', 'cover', 'material', 'natural material', 'knit', 'cotton', 'polyester', 'sherpa', 'coral'],
+        'throw': ['throw', 'blanket', 'textile', 'fabric', 'bedding', 'wool', 'fur', 'soft', 'cozy'],
+        'fleece': ['fleece', 'blanket', 'fabric', 'textile', 'soft', 'warm', 'wool', 'fur', 'material'],
+        'pillow': ['pillow', 'cushion', 'textile', 'fabric', 'bedding', 'soft', 'stuffing', 'comfort'],
+        'curtain': ['curtain', 'drape', 'textile', 'fabric', 'window', 'home', 'decor'],
+        'rug': ['rug', 'carpet', 'mat', 'floor', 'textile', 'fabric', 'home'],
+
+        // Electronics
+        'led': ['led', 'light', 'lamp', 'lighting', 'bulb', 'strip', 'glow', 'bright', 'electric', 'wire', 'cable'],
+        'light': ['light', 'lamp', 'led', 'lighting', 'bulb', 'glow', 'bright', 'illumination'],
+        'phone': ['phone', 'mobile', 'smartphone', 'device', 'electronic', 'gadget', 'screen', 'case', 'cover'],
+        'cable': ['cable', 'wire', 'cord', 'charger', 'usb', 'electric', 'connector'],
+        'speaker': ['speaker', 'audio', 'sound', 'music', 'bluetooth', 'electronic'],
+
+        // Kitchen
+        'kitchen': ['kitchen', 'cookware', 'utensil', 'cooking', 'food', 'baking', 'tool', 'appliance'],
+        'cup': ['cup', 'mug', 'drinkware', 'ceramic', 'glass', 'coffee', 'tea', 'beverage'],
+        'plate': ['plate', 'dish', 'dinnerware', 'ceramic', 'tableware', 'food'],
+
+        // Pets
+        'dog': ['dog', 'pet', 'animal', 'canine', 'puppy', 'collar', 'leash', 'toy'],
+        'cat': ['cat', 'pet', 'animal', 'feline', 'kitten', 'toy'],
+        'pet': ['pet', 'animal', 'dog', 'cat', 'toy', 'collar', 'leash', 'bowl'],
+
+        // Toys & Kids
+        'toy': ['toy', 'play', 'game', 'fun', 'child', 'kid', 'baby', 'stuffed', 'plush'],
+        'baby': ['baby', 'infant', 'child', 'kid', 'nursery', 'toddler'],
+
+        // Clothing (if user wants clothing)
+        'shirt': ['shirt', 'clothing', 'apparel', 'top', 'garment', 'textile', 'fabric', 'fashion'],
+        'dress': ['dress', 'clothing', 'apparel', 'garment', 'fashion', 'textile'],
+        'shoe': ['shoe', 'footwear', 'sneaker', 'boot', 'sandal', 'sole', 'leather'],
+
+        // Jewelry & Accessories
+        'jewelry': ['jewelry', 'jewellery', 'accessory', 'ring', 'necklace', 'bracelet', 'earring', 'gold', 'silver'],
+        'watch': ['watch', 'timepiece', 'wrist', 'clock', 'accessory', 'band', 'strap'],
+        'bag': ['bag', 'handbag', 'purse', 'backpack', 'luggage', 'pouch', 'case'],
+
+        // Beauty
+        'makeup': ['makeup', 'cosmetic', 'beauty', 'lipstick', 'brush', 'powder'],
+        'skincare': ['skincare', 'cream', 'lotion', 'beauty', 'face', 'skin'],
+
+        // Tools & Hardware
+        'tool': ['tool', 'hardware', 'drill', 'wrench', 'screwdriver', 'equipment'],
+
+        // Sports & Outdoor
+        'sport': ['sport', 'fitness', 'exercise', 'gym', 'athletic', 'outdoor'],
+        'camping': ['camping', 'outdoor', 'tent', 'hiking', 'adventure', 'nature']
+      };
+
+      // Build valid categories from search term
+      let validCategories = new Set();
+
+      // Add exact search words
+      searchWords.forEach(word => {
+        validCategories.add(word);
+
+        // Expand with related terms
+        if (keywordExpansions[word]) {
+          keywordExpansions[word].forEach(related => validCategories.add(related));
+        }
+
+        // Also check partial matches
+        Object.keys(keywordExpansions).forEach(key => {
+          if (word.includes(key) || key.includes(word)) {
+            keywordExpansions[key].forEach(related => validCategories.add(related));
+          }
+        });
+      });
+
+      const validCategoriesArray = Array.from(validCategories);
+
+      // NOTE: Reject labels feature removed - caused too many false negatives
+      // Vision's positive matching alone is sufficient (86% accuracy)
+
+      // Check if any detected label matches our dynamic valid categories
+      const hasValidMatch = detectedLabels.some(label =>
+        validCategoriesArray.some(valid =>
+          label.includes(valid) || valid.includes(label)
+        )
+      );
+
+      // Also check direct search term match in labels
+      const hasSearchTermMatch = searchWords.some(word =>
+        detectedLabels.some(label => label.includes(word) || word.includes(label))
+      );
+
+      if (hasValidMatch || hasSearchTermMatch) {
+        return true;
+      }
+
+      return false;
+    }); // End withRetry callback
 
   } catch (error) {
     console.error('Vision API error:', error.message);
@@ -265,6 +299,7 @@ async function analyzeProductImage(imageUrl, searchTerm) {
 // API Routes
 app.post('/api/scrape', async (req, res) => {
   const requestId = Date.now().toString(36);
+  const scrapeId = generateScrapeId();
   console.log(`[${requestId}] POST /api/scrape`, req.body);
 
   const { searchUrl, searchTerm, useImageDetection = true } = req.body;
@@ -280,8 +315,12 @@ app.post('/api/scrape', async (req, res) => {
     });
   }
 
+  // Track this scrape session for cancellation
+  activeScrapes.set(scrapeId, { cancelled: false, startedAt: Date.now() });
+
   try {
     console.log('[API MODE] Using CJ Official API');
+    console.log(`[${requestId}] Scrape ID: ${scrapeId}`);
 
     // Parse search term and filters from URL if provided
     let keyword = searchTerm || searchUrl;
@@ -293,26 +332,37 @@ app.post('/api/scrape', async (req, res) => {
       filters = parsed.filters;
     }
 
-    // FIXED: Fetch ALL pages, not just page 1
+    // Check for cancellation
+    if (activeScrapes.get(scrapeId)?.cancelled) {
+      throw new Error('Scrape cancelled by user');
+    }
+
+    // FIXED: Fetch ALL pages (up to MAX_OFFSET limit)
     const apiResult = await searchCJProducts(keyword, CJ_API_TOKEN, {
       pageNum: 1,
       pageSize: 200, // Max allowed by CJ API
       verifiedWarehouse: filters.verifiedWarehouse,
       categoryId: filters.categoryId || filters.id || null, // Support category filtering (CJ website uses 'id' param)
-      fetchAllPages: true // NEW: Fetch all pages automatically
+      fetchAllPages: true, // Fetch all pages up to MAX_OFFSET
+      scrapeId: scrapeId
     });
 
     if (!apiResult.success) {
       throw new Error(apiResult.error || 'CJ API request failed');
     }
 
+    // Check for cancellation
+    if (activeScrapes.get(scrapeId)?.cancelled) {
+      throw new Error('Scrape cancelled by user');
+    }
+
     // Apply text filtering
     const textFiltered = apiResult.products.filter(p => isRelevantProduct(p.title, keyword));
 
     // Apply image detection if enabled
-    // Uses PARALLEL BATCH PROCESSING for speed (30 images at a time)
+    // REDUCED batch size from 30 to 10 to avoid Vision API rate limits
     let finalProducts = textFiltered;
-    const BATCH_SIZE = 30; // Process 30 images in parallel
+    const BATCH_SIZE = 10; // Reduced from 30 for better rate limit handling
 
     if (useImageDetection && textFiltered.length > 0) {
       console.log(`Analyzing ${textFiltered.length} products with Google Vision in batches of ${BATCH_SIZE}...`);
@@ -320,6 +370,12 @@ app.post('/api/scrape', async (req, res) => {
 
       // Process in parallel batches
       for (let i = 0; i < textFiltered.length; i += BATCH_SIZE) {
+        // Check for cancellation at start of each batch
+        if (activeScrapes.get(scrapeId)?.cancelled) {
+          console.log(`[${requestId}] ⛔ Scrape cancelled during Vision processing`);
+          break;
+        }
+
         const batch = textFiltered.slice(i, i + BATCH_SIZE);
         const batchNum = Math.floor(i / BATCH_SIZE) + 1;
         const totalBatches = Math.ceil(textFiltered.length / BATCH_SIZE);
@@ -346,14 +402,17 @@ app.post('/api/scrape', async (req, res) => {
 
         console.log(`  Batch ${batchNum} complete: ${batchResults.filter(r => r.passed).length}/${batch.length} passed`);
 
-        // Small delay between batches to avoid rate limiting
+        // Increased delay between batches to avoid rate limiting (1.5s instead of 1s)
         if (i + BATCH_SIZE < textFiltered.length) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          await new Promise(resolve => setTimeout(resolve, 1500));
         }
       }
 
       finalProducts = imageFiltered;
     }
+
+    // Cleanup scrape session
+    activeScrapes.delete(scrapeId);
 
     const results = {
       success: true,
@@ -361,13 +420,15 @@ app.post('/api/scrape', async (req, res) => {
       searchTerm: keyword,
       filters: filters,
       totalFound: apiResult.totalProducts,
+      maxFetchable: apiResult.maxFetchablePages ? apiResult.maxFetchablePages * 200 : null,
       pagesScraped: apiResult.fetchedPages || 1,
       textFiltered: textFiltered.length,
       imageFiltered: useImageDetection ? finalProducts.length : null,
       filtered: finalProducts.length,
       passRate: ((finalProducts.length / apiResult.totalProducts) * 100).toFixed(1) + '%',
       products: finalProducts,
-      imageDetectionUsed: useImageDetection
+      imageDetectionUsed: useImageDetection,
+      scrapeId: scrapeId
     };
 
     // Clean summary log
@@ -378,6 +439,9 @@ app.post('/api/scrape', async (req, res) => {
     console.log(`Category ID: ${usedCategoryId || 'NONE - will return ALL products!'}`);
     console.log(`---`);
     console.log(`📥 CJ API: ${apiResult.totalProducts} total (${apiResult.fetchedPages || 1} pages scraped)`);
+    if (apiResult.maxFetchablePages && apiResult.totalProducts > apiResult.maxFetchablePages * 200) {
+      console.log(`⚠️  Note: Only ${apiResult.maxFetchablePages * 200} products accessible (API offset limit: ${MAX_OFFSET})`);
+    }
     console.log(`📥 Actually Fetched: ${apiResult.actualFetched || apiResult.products?.length || 0} products`);
     console.log(`---`);
     console.log(`📝 Text Filter: ${textFiltered.length}/${apiResult.actualFetched || apiResult.totalProducts} passed (${((textFiltered.length / (apiResult.actualFetched || apiResult.totalProducts)) * 100).toFixed(1)}%)`);
@@ -390,9 +454,42 @@ app.post('/api/scrape', async (req, res) => {
 
     res.json({ ...results, requestId });
   } catch (error) {
+    // Cleanup scrape session on error
+    activeScrapes.delete(scrapeId);
     console.error(`[${requestId}] Error:`, error);
-    res.status(500).json({ error: error.message, requestId });
+    res.status(500).json({ error: error.message, requestId, scrapeId });
   }
+});
+
+// Cancel a scrape in progress
+app.post('/api/scrape/cancel', (req, res) => {
+  const { scrapeId } = req.body;
+
+  if (!scrapeId) {
+    return res.status(400).json({ error: 'scrapeId is required' });
+  }
+
+  if (activeScrapes.has(scrapeId)) {
+    activeScrapes.get(scrapeId).cancelled = true;
+    cancelScrape(scrapeId); // Also cancel in cj-api-scraper
+    console.log(`[CANCEL] Scrape ${scrapeId} cancelled`);
+    res.json({ success: true, message: `Scrape ${scrapeId} cancelled` });
+  } else {
+    res.json({ success: false, message: 'Scrape not found or already completed' });
+  }
+});
+
+// Cancel all active scrapes
+app.post('/api/scrape/cancel-all', (req, res) => {
+  const cancelled = [];
+  activeScrapes.forEach((session, id) => {
+    session.cancelled = true;
+    cancelScrape(id);
+    cancelled.push(id);
+  });
+  activeScrapes.clear();
+  console.log(`[CANCEL] All scrapes cancelled: ${cancelled.length}`);
+  res.json({ success: true, cancelled: cancelled.length, ids: cancelled });
 });
 
 // Get CJ categories endpoint

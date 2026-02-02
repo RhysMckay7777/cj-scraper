@@ -18,6 +18,8 @@ function BatchSearch({ stores, activeStore, activeStoreId, setActiveStoreId }) {
   const [error, setError] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [expandedResults, setExpandedResults] = useState({}); // Track which results are expanded
+  const [currentScrapeId, setCurrentScrapeId] = useState(null); // Track current scrape for cancellation
+  const [isCancelling, setIsCancelling] = useState(false);
 
   const addSearch = () => {
     setSearches([...searches, { keyword: '', url: '', enabled: true }]);
@@ -38,6 +40,22 @@ function BatchSearch({ stores, activeStore, activeStoreId, setActiveStoreId }) {
     const updated = [...searches];
     updated[index][field] = value;
     setSearches(updated);
+  };
+
+  // Cancel all active scrapes
+  const handleCancelScrape = async () => {
+    setIsCancelling(true);
+    try {
+      await axios.post(`${API_URL}/api/scrape/cancel-all`);
+      console.log('Scrape cancelled');
+      setError('Scrape cancelled by user');
+    } catch (err) {
+      console.error('Failed to cancel:', err);
+    } finally {
+      setIsCancelling(false);
+      setLoading(false);
+      setCurrentScrapeId(null);
+    }
   };
 
   const handleBatchScrape = async (e) => {
@@ -273,9 +291,25 @@ function BatchSearch({ stores, activeStore, activeStoreId, setActiveStoreId }) {
           <button type="button" onClick={addSearch} disabled={loading} className="add-btn">
             ➕ Add Search
           </button>
-          <button type="submit" disabled={loading} className="batch-submit">
-            {loading ? `Scraping... (${results.length}/${searches.filter(s => s.enabled && s.keyword).length})` : '🚀 Start Batch Scrape'}
-          </button>
+          {loading ? (
+            <>
+              <button
+                type="button"
+                onClick={handleCancelScrape}
+                disabled={isCancelling}
+                className="stop-btn"
+              >
+                {isCancelling ? '⏳ Cancelling...' : '🛑 Stop Scraping'}
+              </button>
+              <span className="scraping-status">
+                Scraping... ({results.length}/{searches.filter(s => s.enabled && (s.url.trim() || s.keyword.trim())).length})
+              </span>
+            </>
+          ) : (
+            <button type="submit" className="batch-submit">
+              🚀 Start Batch Scrape
+            </button>
+          )}
         </div>
       </form>
 
