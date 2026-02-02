@@ -50,6 +50,7 @@ async function searchCJProducts(searchTerm, cjToken, options = {}) {
       pageSize = 100,
       verifiedWarehouse = null,
       categoryId = null,
+      categoryIds = null, // NEW: Support multiple category IDs
       startWarehouseInventory = null,
       endWarehouseInventory = null,
       fetchAllPages = false, // Option to fetch all pages
@@ -58,25 +59,41 @@ async function searchCJProducts(searchTerm, cjToken, options = {}) {
 
     console.log(`[CJ API] Searching for: "${searchTerm}" (page ${pageNum})`);
 
-    // Build query parameters - using /product/list (not listV2)
-    // This endpoint uses exact keyword matching, not elasticsearch
+    // Determine if we should use listV2 (has category filtering) or list
+    const hasCategories = categoryId || (categoryIds && categoryIds.length > 0);
+    const useListV2 = hasCategories;
+
+    // Build query parameters
     const params = new URLSearchParams({
-      productNameEn: searchTerm,
       pageNum: pageNum.toString(),
       pageSize: Math.min(pageSize, 200).toString() // Max 200 per API docs
     });
+
+    // Different param name for V2 vs V1
+    if (useListV2) {
+      params.append('keyWord', searchTerm);
+      console.log(`[CJ API] Using /product/listV2 with category filtering`);
+    } else {
+      params.append('productNameEn', searchTerm);
+    }
 
     if (verifiedWarehouse) {
       params.append('verifiedWarehouse', verifiedWarehouse.toString());
     }
 
-    // NEW: Add category filtering if provided
+    // Category filtering - single ID
     if (categoryId) {
       params.append('categoryId', categoryId.toString());
       console.log(`[CJ API] Filtering by categoryId: ${categoryId}`);
     }
 
-    // BUG FIX: Add inventory filtering if provided
+    // Category filtering - multiple IDs (NEW)
+    if (categoryIds && categoryIds.length > 0) {
+      params.append('lv3categoryList', JSON.stringify(categoryIds));
+      console.log(`[CJ API] Filtering by ${categoryIds.length} category IDs`);
+    }
+
+    // Inventory filtering
     if (startWarehouseInventory) {
       params.append('startInventory', startWarehouseInventory.toString());
       console.log(`[CJ API] Filtering by startInventory: ${startWarehouseInventory}`);
@@ -87,8 +104,9 @@ async function searchCJProducts(searchTerm, cjToken, options = {}) {
       console.log(`[CJ API] Filtering by endInventory: ${endWarehouseInventory}`);
     }
 
-    // Use /product/list instead of /product/listV2
-    const response = await axios.get(`${CJ_API_BASE}/product/list?${params.toString()}`, {
+    // Use listV2 for category filtering, list for basic search
+    const endpoint = useListV2 ? 'product/listV2' : 'product/list';
+    const response = await axios.get(`${CJ_API_BASE}/${endpoint}?${params.toString()}`, {
       headers: {
         'CJ-Access-Token': cjToken,
         'Content-Type': 'application/json'

@@ -3,6 +3,11 @@ const path = require('path');
 const axios = require('axios');
 const fs = require('fs');
 const { searchCJProducts, getCJCategories, cancelScrape, generateScrapeId, MAX_OFFSET } = require('./cj-api-scraper');
+const { getCategoryIndex, searchCategories } = require('./category-service');
+const { mapSearchToCategories, generateDynamicKeywords } = require('./ai-keyword-generator');
+
+// Gemini API Key for dynamic keyword generation
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 
 // ============================================
 // DEBUG: Global error handlers to catch crashes
@@ -151,9 +156,9 @@ async function withRetry(fn, maxRetries = 3, baseDelayMs = 1000) {
   throw lastError;
 }
 
-// Analyze image with Google Vision API - DYNAMIC category detection
-// Now includes retry logic for transient errors
-async function analyzeProductImage(imageUrl, searchTerm, imageIndex = 0) {
+// Analyze image with Google Vision API - DYNAMIC AI-powered filtering
+// Supports both static fallback and AI-generated valid/reject keywords
+async function analyzeProductImage(imageUrl, searchTerm, imageIndex = 0, dynamicKeywords = null) {
   const startTime = Date.now();
   try {
     if (!GOOGLE_VISION_API_KEY && !process.env.GOOGLE_APPLICATION_CREDENTIALS && !GOOGLE_CREDENTIALS_JSON) {
@@ -166,7 +171,7 @@ async function analyzeProductImage(imageUrl, searchTerm, imageIndex = 0) {
       console.log(`    [Vision:${imageIndex}] Downloading image...`);
       const response = await axios.get(imageUrl, {
         responseType: 'arraybuffer',
-        timeout: 15000, // Increased timeout
+        timeout: 15000,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
@@ -180,17 +185,13 @@ async function analyzeProductImage(imageUrl, searchTerm, imageIndex = 0) {
 
       // Try service account first, fallback to API key
       if (process.env.GOOGLE_APPLICATION_CREDENTIALS || GOOGLE_CREDENTIALS_JSON) {
-        // Use @google-cloud/vision SDK
         const vision = require('@google-cloud/vision');
         const client = new vision.ImageAnnotatorClient();
-
         const [result] = await client.labelDetection({
           image: { content: imageBuffer }
         });
-
         labels = result.labelAnnotations || [];
       } else if (GOOGLE_VISION_API_KEY) {
-        // Use REST API with API key
         const visionResponse = await axios.post(
           `https://vision.googleapis.com/v1/images:annotate?key=${GOOGLE_VISION_API_KEY}`,
           {
@@ -201,128 +202,83 @@ async function analyzeProductImage(imageUrl, searchTerm, imageIndex = 0) {
           },
           { timeout: 15000 }
         );
-
         labels = visionResponse.data.responses[0]?.labelAnnotations || [];
       }
 
       const detectedLabels = labels.map(l => l.description.toLowerCase());
+      console.log(`    [Vision:${imageIndex}] Detected: ${detectedLabels.slice(0, 5).join(', ')}`);
 
       // ===========================================
-      // DYNAMIC CATEGORY DETECTION
+      // AI-POWERED DYNAMIC FILTERING
       // ===========================================
-      // Build valid categories from the search term DYNAMICALLY
+
+      let validLabels = [];
+      let rejectLabels = [];
+
+      if (dynamicKeywords && dynamicKeywords.valid && dynamicKeywords.reject) {
+        // Use AI-generated keywords
+        validLabels = dynamicKeywords.valid.map(l => l.toLowerCase());
+        rejectLabels = dynamicKeywords.reject.map(l => l.toLowerCase());
+
+        // ===== CRITICAL: CHECK REJECT LABELS FIRST =====
+        // This catches false positives like pillows in a throw search
+        const hasRejectLabel = detectedLabels.some(label =>
+          rejectLabels.some(reject =>
+            label.includes(reject) || reject.includes(label)
+          )
+        );
+
+        if (hasRejectLabel) {
+          const matchedReject = detectedLabels.filter(label =>
+            rejectLabels.some(reject =>
+              label.includes(reject) || reject.includes(label)
+            )
+          );
+          console.log(`    [Vision:${imageIndex}] ❌ REJECTED by: ${matchedReject.join(', ')}`);
+          return false;
+        }
+
+        // Check valid labels
+        const hasValidMatch = detectedLabels.some(label =>
+          validLabels.some(valid =>
+            label.includes(valid) || valid.includes(label)
+          )
+        );
+
+        if (hasValidMatch) {
+          console.log(`    [Vision:${imageIndex}] ✅ PASSED (valid label match)`);
+          return true;
+        }
+
+        console.log(`    [Vision:${imageIndex}] ❌ REJECTED (no valid labels)`);
+        return false;
+      }
+
+      // ===========================================
+      // FALLBACK: Static keyword expansion
+      // ===========================================
       const searchLower = searchTerm.toLowerCase();
       const searchWords = searchLower.split(/[\s+]+/).filter(w => w.length > 2);
 
-      // Semantic keyword expansions - maps keywords to related valid labels
+      // Static keyword expansions as fallback
       const keywordExpansions = {
-        // Home textiles - EXPANDED
-        'blanket': ['blanket', 'throw', 'textile', 'fabric', 'fleece', 'bedding', 'wool', 'woolen', 'fur', 'velvet', 'flannel', 'plush', 'soft', 'warm', 'cozy', 'quilt', 'comforter', 'duvet', 'cover', 'material', 'natural material', 'knit', 'cotton', 'polyester', 'sherpa', 'coral', 'fuzzy', 'fluffy'],
-        'throw': ['throw', 'blanket', 'textile', 'fabric', 'bedding', 'wool', 'fur', 'soft', 'cozy', 'plush', 'fuzzy', 'fluffy', 'warm'],
-        'fleece': ['fleece', 'blanket', 'fabric', 'textile', 'soft', 'warm', 'wool', 'fur', 'material', 'plush', 'fuzzy'],
-        'faux': ['faux', 'fake', 'synthetic', 'artificial', 'fur', 'leather', 'textile', 'fabric', 'material', 'plush', 'soft', 'fuzzy', 'fluffy'],
-        'fur': ['fur', 'faux', 'fuzzy', 'fluffy', 'plush', 'soft', 'textile', 'fabric', 'wool', 'fleece', 'blanket', 'throw', 'warm', 'cozy', 'animal', 'hair'],
-        'fuzzy': ['fuzzy', 'fluffy', 'plush', 'soft', 'fur', 'faux', 'textile', 'fabric', 'warm', 'cozy'],
-        'plush': ['plush', 'soft', 'fuzzy', 'fluffy', 'fur', 'textile', 'fabric', 'stuffed', 'toy', 'blanket'],
-        'pillow': ['pillow', 'cushion', 'textile', 'fabric', 'bedding', 'soft', 'stuffing', 'comfort', 'plush', 'decorative'],
-        'curtain': ['curtain', 'drape', 'textile', 'fabric', 'window', 'home', 'decor', 'sheer', 'blackout'],
-        'rug': ['rug', 'carpet', 'mat', 'floor', 'textile', 'fabric', 'home', 'area', 'runner', 'shag'],
-        'bedding': ['bedding', 'sheet', 'blanket', 'pillow', 'duvet', 'comforter', 'mattress', 'textile', 'fabric', 'bed'],
-
-        // Automotive - NEW
-        'car': ['car', 'auto', 'automobile', 'automotive', 'vehicle', 'motor', 'driving', 'wheel', 'tire', 'engine', 'hood', 'bumper', 'accessory', 'part', 'component'],
-        'parts': ['part', 'parts', 'component', 'piece', 'hardware', 'accessory', 'replacement', 'repair', 'automotive', 'car', 'auto', 'machine'],
-        'automotive': ['automotive', 'car', 'auto', 'vehicle', 'motor', 'engine', 'wheel', 'tire', 'accessory', 'part'],
-        'tire': ['tire', 'tyre', 'wheel', 'rubber', 'car', 'auto', 'vehicle', 'rim'],
-        'engine': ['engine', 'motor', 'car', 'auto', 'vehicle', 'mechanical', 'part', 'component'],
-
-        // Electronics - EXPANDED
-        'led': ['led', 'light', 'lamp', 'lighting', 'bulb', 'strip', 'glow', 'bright', 'electric', 'wire', 'cable', 'neon', 'rgb'],
-        'light': ['light', 'lamp', 'led', 'lighting', 'bulb', 'glow', 'bright', 'illumination', 'chandelier', 'fixture'],
-        'phone': ['phone', 'mobile', 'smartphone', 'device', 'electronic', 'gadget', 'screen', 'case', 'cover', 'cell', 'iphone', 'android'],
-        'cable': ['cable', 'wire', 'cord', 'charger', 'usb', 'electric', 'connector', 'adapter', 'charging'],
-        'speaker': ['speaker', 'audio', 'sound', 'music', 'bluetooth', 'electronic', 'stereo', 'portable'],
-        'earphone': ['earphone', 'headphone', 'earbud', 'audio', 'music', 'wireless', 'bluetooth', 'sound'],
-        'charger': ['charger', 'charging', 'cable', 'usb', 'power', 'adapter', 'battery', 'wireless'],
-
-        // Kitchen - EXPANDED
-        'kitchen': ['kitchen', 'cookware', 'utensil', 'cooking', 'food', 'baking', 'tool', 'appliance', 'gadget', 'chef'],
-        'cup': ['cup', 'mug', 'drinkware', 'ceramic', 'glass', 'coffee', 'tea', 'beverage', 'tumbler'],
-        'plate': ['plate', 'dish', 'dinnerware', 'ceramic', 'tableware', 'food', 'bowl', 'serving'],
-        'bottle': ['bottle', 'water', 'drink', 'container', 'flask', 'thermos', 'beverage', 'glass', 'plastic'],
-        'knife': ['knife', 'blade', 'cutting', 'kitchen', 'chef', 'utensil', 'tool', 'steel', 'sharp'],
-        'pot': ['pot', 'pan', 'cookware', 'cooking', 'kitchen', 'stainless', 'nonstick', 'lid'],
-
-        // Pets - EXPANDED
-        'dog': ['dog', 'pet', 'animal', 'canine', 'puppy', 'collar', 'leash', 'toy', 'bone', 'treat', 'bowl'],
-        'cat': ['cat', 'pet', 'animal', 'feline', 'kitten', 'toy', 'litter', 'scratching', 'mouse'],
-        'pet': ['pet', 'animal', 'dog', 'cat', 'toy', 'collar', 'leash', 'bowl', 'food', 'treat', 'bed'],
-
-        // Toys & Kids - EXPANDED
-        'toy': ['toy', 'play', 'game', 'fun', 'child', 'kid', 'baby', 'stuffed', 'plush', 'action', 'figure', 'doll'],
-        'baby': ['baby', 'infant', 'child', 'kid', 'nursery', 'toddler', 'newborn', 'diaper', 'bottle', 'stroller'],
-        'game': ['game', 'toy', 'play', 'board', 'card', 'puzzle', 'fun', 'entertainment', 'video'],
-
-        // Clothing - EXPANDED
-        'shirt': ['shirt', 'clothing', 'apparel', 'top', 'garment', 'textile', 'fabric', 'fashion', 'tshirt', 'blouse'],
-        'dress': ['dress', 'clothing', 'apparel', 'garment', 'fashion', 'textile', 'gown', 'skirt', 'woman'],
-        'shoe': ['shoe', 'footwear', 'sneaker', 'boot', 'sandal', 'sole', 'leather', 'heel', 'slipper', 'loafer'],
-        'pants': ['pants', 'jeans', 'trousers', 'clothing', 'apparel', 'denim', 'legging', 'shorts'],
-        'jacket': ['jacket', 'coat', 'clothing', 'outerwear', 'hoodie', 'sweater', 'cardigan', 'blazer'],
-        'sock': ['sock', 'socks', 'hosiery', 'foot', 'ankle', 'clothing', 'cotton', 'warm'],
-
-        // Jewelry & Accessories - EXPANDED
-        'jewelry': ['jewelry', 'jewellery', 'accessory', 'ring', 'necklace', 'bracelet', 'earring', 'gold', 'silver', 'pendant', 'chain'],
-        'watch': ['watch', 'timepiece', 'wrist', 'clock', 'accessory', 'band', 'strap', 'smart', 'digital', 'analog'],
-        'bag': ['bag', 'handbag', 'purse', 'backpack', 'luggage', 'pouch', 'case', 'tote', 'shoulder', 'crossbody'],
-        'sunglasses': ['sunglasses', 'glasses', 'eyewear', 'shades', 'accessory', 'frame', 'lens', 'uv'],
-        'hat': ['hat', 'cap', 'beanie', 'headwear', 'accessory', 'baseball', 'sun', 'winter'],
-        'scarf': ['scarf', 'shawl', 'wrap', 'accessory', 'textile', 'fabric', 'neck', 'winter', 'warm'],
-
-        // Beauty - EXPANDED
-        'makeup': ['makeup', 'cosmetic', 'beauty', 'lipstick', 'brush', 'powder', 'foundation', 'mascara', 'eyeshadow'],
-        'skincare': ['skincare', 'cream', 'lotion', 'beauty', 'face', 'skin', 'serum', 'moisturizer', 'cleanser'],
-        'hair': ['hair', 'brush', 'comb', 'dryer', 'styling', 'shampoo', 'conditioner', 'beauty', 'salon'],
-        'nail': ['nail', 'manicure', 'polish', 'gel', 'beauty', 'art', 'tool', 'file', 'clipper'],
-
-        // Tools & Hardware - EXPANDED
-        'tool': ['tool', 'hardware', 'drill', 'wrench', 'screwdriver', 'equipment', 'hammer', 'plier', 'measure', 'repair'],
-        'screw': ['screw', 'bolt', 'nut', 'fastener', 'hardware', 'tool', 'metal', 'mounting'],
-        'drill': ['drill', 'tool', 'bit', 'power', 'electric', 'cordless', 'hardware', 'hole'],
-
-        // Sports & Outdoor - EXPANDED
-        'sport': ['sport', 'fitness', 'exercise', 'gym', 'athletic', 'outdoor', 'training', 'workout', 'running'],
-        'camping': ['camping', 'outdoor', 'tent', 'hiking', 'adventure', 'nature', 'survival', 'backpack', 'flashlight'],
-        'fishing': ['fishing', 'fish', 'rod', 'reel', 'bait', 'hook', 'line', 'tackle', 'outdoor', 'water'],
-        'yoga': ['yoga', 'mat', 'fitness', 'exercise', 'stretch', 'meditation', 'pilates', 'workout'],
-        'bicycle': ['bicycle', 'bike', 'cycling', 'wheel', 'pedal', 'helmet', 'sport', 'outdoor', 'ride'],
-
-        // Garden & Home - NEW
-        'garden': ['garden', 'plant', 'flower', 'pot', 'outdoor', 'green', 'lawn', 'yard', 'landscaping', 'soil'],
-        'plant': ['plant', 'flower', 'pot', 'garden', 'green', 'leaf', 'seed', 'grow', 'indoor', 'outdoor'],
-        'decor': ['decor', 'decoration', 'home', 'wall', 'art', 'ornament', 'interior', 'design', 'style'],
-        'storage': ['storage', 'box', 'container', 'organizer', 'bin', 'basket', 'shelf', 'holder', 'rack'],
-        'cleaning': ['cleaning', 'brush', 'mop', 'bucket', 'wipe', 'cloth', 'sponge', 'detergent', 'household'],
-
-        // Office & Stationery - NEW
-        'office': ['office', 'desk', 'chair', 'stationery', 'pen', 'paper', 'file', 'organize', 'work'],
-        'pen': ['pen', 'pencil', 'marker', 'writing', 'stationery', 'ink', 'office', 'school'],
-        'notebook': ['notebook', 'book', 'journal', 'diary', 'paper', 'writing', 'note', 'stationery']
+        'blanket': ['blanket', 'throw', 'textile', 'fabric', 'fleece', 'bedding', 'wool', 'fur', 'plush', 'soft'],
+        'throw': ['throw', 'blanket', 'textile', 'fabric', 'wool', 'fur', 'soft', 'cozy', 'plush'],
+        'pillow': ['pillow', 'cushion', 'textile', 'fabric', 'bedding', 'soft'],
+        'phone': ['phone', 'mobile', 'smartphone', 'device', 'electronic', 'screen', 'case'],
+        'dog': ['dog', 'pet', 'animal', 'canine', 'collar', 'leash', 'toy'],
+        'cat': ['cat', 'pet', 'animal', 'feline', 'toy'],
+        'light': ['light', 'lamp', 'led', 'lighting', 'bulb'],
+        'kitchen': ['kitchen', 'cookware', 'utensil', 'cooking'],
+        'bag': ['bag', 'handbag', 'purse', 'backpack', 'luggage']
       };
 
-      // Build valid categories from search term
       let validCategories = new Set();
-
-      // Add exact search words
       searchWords.forEach(word => {
         validCategories.add(word);
-
-        // Expand with related terms
         if (keywordExpansions[word]) {
           keywordExpansions[word].forEach(related => validCategories.add(related));
         }
-
-        // Also check partial matches
         Object.keys(keywordExpansions).forEach(key => {
           if (word.includes(key) || key.includes(word)) {
             keywordExpansions[key].forEach(related => validCategories.add(related));
@@ -331,18 +287,12 @@ async function analyzeProductImage(imageUrl, searchTerm, imageIndex = 0) {
       });
 
       const validCategoriesArray = Array.from(validCategories);
-
-      // NOTE: Reject labels feature removed - caused too many false negatives
-      // Vision's positive matching alone is sufficient (86% accuracy)
-
-      // Check if any detected label matches our dynamic valid categories
       const hasValidMatch = detectedLabels.some(label =>
         validCategoriesArray.some(valid =>
           label.includes(valid) || valid.includes(label)
         )
       );
 
-      // Also check direct search term match in labels
       const hasSearchTermMatch = searchWords.some(word =>
         detectedLabels.some(label => label.includes(word) || word.includes(label))
       );
@@ -446,6 +396,25 @@ app.post('/api/scrape', async (req, res) => {
 
     if (useImageDetection && textFiltered.length > 0) {
       logMemory('VISION_START');
+
+      // ===============================================
+      // NEW: Generate dynamic AI keywords for filtering
+      // ===============================================
+      let dynamicKeywords = null;
+      if (GEMINI_API_KEY) {
+        console.log(`\n🤖 [AI] Generating dynamic keywords for "${keyword}"...`);
+        try {
+          dynamicKeywords = await generateDynamicKeywords(keyword, GEMINI_API_KEY);
+          console.log(`🤖 [AI] Valid labels: ${dynamicKeywords.valid?.slice(0, 5).join(', ')}...`);
+          console.log(`🤖 [AI] Reject labels: ${dynamicKeywords.reject?.join(', ') || 'none'}`);
+          console.log(`🤖 [AI] Confidence: ${dynamicKeywords.confidence || 'unknown'}`);
+        } catch (aiError) {
+          console.log(`⚠️ [AI] Keyword generation failed: ${aiError.message}, using static fallback`);
+        }
+      } else {
+        console.log(`ℹ️ [AI] No GEMINI_API_KEY, using static keyword matching`);
+      }
+
       console.log(`Analyzing ${textFiltered.length} products with Google Vision in batches of ${VISION_BATCH_SIZE}...`);
       console.log(`Estimated time: ${Math.ceil(textFiltered.length / VISION_BATCH_SIZE * 1.5)} seconds`);
       const imageFiltered = [];
@@ -476,7 +445,7 @@ app.post('/api/scrape', async (req, res) => {
           batch.map(async (product, idx) => {
             try {
               if (product.image) {
-                const passed = await analyzeProductImage(product.image, keyword, i + idx);
+                const passed = await analyzeProductImage(product.image, keyword, i + idx, dynamicKeywords);
                 return { product, passed };
               }
               return { product, passed: false };
