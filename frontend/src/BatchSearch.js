@@ -219,11 +219,15 @@ function BatchSearch({ stores, activeStore, activeStoreId, setActiveStoreId }) {
     setError(null);
 
     try {
+      // Uploading 100 products takes ~1 minute minimum
+      // Set timeout to 10 minutes to be safe
       const response = await axios.post(`${API_URL}/api/upload-shopify`, {
         products: allProducts,
         shopifyStore: activeStore.url,
         shopifyToken: activeStore.token,
         markup: 250 // Default 250% markup
+      }, {
+        timeout: 600000 // 10 minutes timeout for large uploads
       });
 
       alert(`Successfully uploaded ${response.data.uploaded}/${allProducts.length} products to Shopify!`);
@@ -231,8 +235,12 @@ function BatchSearch({ stores, activeStore, activeStoreId, setActiveStoreId }) {
         alert(`Note: ${response.data.limitApplied}`);
       }
     } catch (err) {
-      setError(err.response?.data?.error || err.message);
-      alert('Upload failed: ' + (err.response?.data?.error || err.message));
+      if (err.code === 'ECONNABORTED') {
+        setError('Upload timed out - check Shopify for partial uploads');
+      } else {
+        setError(err.response?.data?.error || err.message);
+      }
+      alert('Upload issue: ' + (err.response?.data?.error || err.message || 'Check Shopify for results'));
     } finally {
       setUploading(false);
     }

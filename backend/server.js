@@ -613,8 +613,8 @@ app.post('/api/upload-shopify', async (req, res) => {
     });
   }
 
-  // Limit products to prevent timeout (Render free tier)
-  const MAX_PRODUCTS_PER_UPLOAD = 200;
+  // Limit products to prevent timeout (100 products = ~1 minute)
+  const MAX_PRODUCTS_PER_UPLOAD = 100;
   let productsToUpload = products;
   if (products.length > MAX_PRODUCTS_PER_UPLOAD) {
     console.log(`⚠️ Limiting upload to first ${MAX_PRODUCTS_PER_UPLOAD} products (requested ${products.length})`);
