@@ -343,6 +343,8 @@ app.post('/api/scrape', async (req, res) => {
       pageSize: 200, // Max allowed by CJ API
       verifiedWarehouse: filters.verifiedWarehouse,
       categoryId: filters.categoryId || filters.id || null, // Support category filtering (CJ website uses 'id' param)
+      startWarehouseInventory: filters.startWarehouseInventory || null, // BUG FIX: Pass inventory filters
+      endWarehouseInventory: filters.endWarehouseInventory || null, // BUG FIX: Pass inventory filters
       fetchAllPages: true, // Fetch all pages up to MAX_OFFSET
       scrapeId: scrapeId
     });
@@ -357,12 +359,21 @@ app.post('/api/scrape', async (req, res) => {
     }
 
     // Apply text filtering
-    const textFiltered = apiResult.products.filter(p => isRelevantProduct(p.title, keyword));
+    let textFiltered = apiResult.products.filter(p => isRelevantProduct(p.title, keyword));
+
+    // BUG FIX: Limit total products to prevent runaway scrapes
+    const MAX_PRODUCTS_TO_PROCESS = 1000;
+    if (textFiltered.length > MAX_PRODUCTS_TO_PROCESS) {
+      console.log(`⚠️ Limiting Vision analysis to first ${MAX_PRODUCTS_TO_PROCESS} products (found ${textFiltered.length})`);
+      textFiltered = textFiltered.slice(0, MAX_PRODUCTS_TO_PROCESS);
+    }
 
     // Apply image detection if enabled
     // REDUCED batch size from 30 to 10 to avoid Vision API rate limits
     let finalProducts = textFiltered;
     const BATCH_SIZE = 10; // Reduced from 30 for better rate limit handling
+    const SCRAPE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes max scrape time
+    const scrapeStartTime = Date.now();
 
     if (useImageDetection && textFiltered.length > 0) {
       console.log(`Analyzing ${textFiltered.length} products with Google Vision in batches of ${BATCH_SIZE}...`);
@@ -373,6 +384,12 @@ app.post('/api/scrape', async (req, res) => {
         // Check for cancellation at start of each batch
         if (activeScrapes.get(scrapeId)?.cancelled) {
           console.log(`[${requestId}] ⛔ Scrape cancelled during Vision processing`);
+          break;
+        }
+
+        // BUG FIX: Check for timeout
+        if (Date.now() - scrapeStartTime > SCRAPE_TIMEOUT_MS) {
+          console.log(`[${requestId}] ⏱️ Scrape timeout reached (${SCRAPE_TIMEOUT_MS / 1000 / 60} minutes), stopping...`);
           break;
         }
 

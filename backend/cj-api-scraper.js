@@ -50,6 +50,8 @@ async function searchCJProducts(searchTerm, cjToken, options = {}) {
       pageSize = 100,
       verifiedWarehouse = null,
       categoryId = null,
+      startWarehouseInventory = null,
+      endWarehouseInventory = null,
       fetchAllPages = false, // Option to fetch all pages
       scrapeId = null // For cancellation support
     } = options;
@@ -72,6 +74,17 @@ async function searchCJProducts(searchTerm, cjToken, options = {}) {
     if (categoryId) {
       params.append('categoryId', categoryId.toString());
       console.log(`[CJ API] Filtering by categoryId: ${categoryId}`);
+    }
+
+    // BUG FIX: Add inventory filtering if provided
+    if (startWarehouseInventory) {
+      params.append('startInventory', startWarehouseInventory.toString());
+      console.log(`[CJ API] Filtering by startInventory: ${startWarehouseInventory}`);
+    }
+
+    if (endWarehouseInventory) {
+      params.append('endInventory', endWarehouseInventory.toString());
+      console.log(`[CJ API] Filtering by endInventory: ${endWarehouseInventory}`);
     }
 
     // Use /product/list instead of /product/listV2
