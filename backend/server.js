@@ -95,8 +95,15 @@ app.use((req, res, next) => {
 // VERY RELAXED text filter - let image detection do the heavy lifting
 // Just need AT LEAST ONE search word to match - Vision API will filter out bad matches
 function isRelevantProduct(productTitle, searchTerm) {
-  const lowerTitle = productTitle.toLowerCase();
-  const lowerSearch = searchTerm.toLowerCase();
+  // DEBUG: Log first 3 calls to trace the issue
+  if (!isRelevantProduct.debugCount) isRelevantProduct.debugCount = 0;
+  if (isRelevantProduct.debugCount < 3) {
+    console.log(`[DEBUG isRelevantProduct] productTitle="${productTitle?.substring(0, 50) || 'EMPTY'}", searchTerm="${searchTerm}"`);
+    isRelevantProduct.debugCount++;
+  }
+
+  const lowerTitle = (productTitle || '').toLowerCase();
+  const lowerSearch = (searchTerm || '').toLowerCase();
 
   // Extract main keywords (words > 2 chars)
   const searchWords = lowerSearch.split(' ').filter(w => w.length > 2);
@@ -405,10 +412,8 @@ app.post('/api/scrape', async (req, res) => {
       throw new Error('Scrape cancelled by user');
     }
 
-    // Apply text filtering - CJ API uses productNameEn or productName
-    let textFiltered = apiResult.products.filter(p =>
-      isRelevantProduct(p.productNameEn || p.productName || '', keyword)
-    );
+    // Apply text filtering (cj-api-scraper transforms productNameEn to 'title')
+    let textFiltered = apiResult.products.filter(p => isRelevantProduct(p.title || '', keyword));
 
     // BUG FIX: Limit total products to prevent runaway scrapes
     const MAX_PRODUCTS_TO_PROCESS = 1000;
