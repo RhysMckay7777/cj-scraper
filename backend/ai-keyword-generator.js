@@ -125,23 +125,20 @@ User search: "${searchTerm}"
 Generate TWO keyword lists for Google Vision API image filtering:
 
 1. VALID labels (10-15): Labels that indicate this IS the correct product
-   - Include the specific product type
+   - MUST include the product name itself (e.g., "blanket" for blanket search)
    - Include related materials, textures, features
    - Be specific to the search intent
 
 2. REJECT labels (5-10): Labels that indicate this is NOT the correct product
-   - Common products that might appear in same category but are WRONG
-   - Items that would be false positives
-   - Be specific about what to exclude
+   - NEVER include the product name itself in reject (e.g., don't reject "blanket" when searching for blankets!)
+   - Only items that are CLEARLY wrong products
+   - Be conservative - only reject obvious false positives
 
-Context:
-- Google Vision API returns labels like: "textile", "furniture", "pillow", "blanket", etc.
-- VALID labels help identify correct products
-- REJECT labels catch false positives (CRITICAL for accuracy)
+CRITICAL: If searching for "weighted blanket", the word "blanket" should be in VALID, never in REJECT!
 
-Example for "laptop stand":
-- Valid: ["stand", "desk", "support", "computer", "laptop", "aluminum", "ergonomic", "holder"]
-- Reject: ["bag", "case", "sleeve", "keyboard", "mouse", "headphone"]
+Example for "weighted blanket":
+- Valid: ["blanket", "weighted", "textile", "bedding", "fabric", "wool", "cotton", "linen", "throw", "quilt"]
+- Reject: ["pillow", "cushion", "curtain", "rug", "mat", "towel"]
 
 Return ONLY valid JSON:
 {
@@ -163,14 +160,29 @@ Return ONLY valid JSON:
 
         const parsed = JSON.parse(jsonMatch[0]);
 
+        // SAFEGUARD: Ensure search term words are NEVER in reject labels
+        const searchWords = searchTerm.toLowerCase().split(/[\s+]+/).filter(w => w.length > 2);
+        const filteredReject = parsed.reject.filter(label => {
+            const lowerLabel = label.toLowerCase();
+            // Remove any reject label that contains a search word
+            return !searchWords.some(word => lowerLabel.includes(word) || word.includes(lowerLabel));
+        });
+
         console.log(`[AI Generator] Generated keywords for "${searchTerm}":`);
         console.log(`  Valid: ${parsed.valid.join(', ')}`);
-        console.log(`  Reject: ${parsed.reject.join(', ')}`);
+        console.log(`  Reject (original): ${parsed.reject.join(', ')}`);
+        console.log(`  Reject (filtered): ${filteredReject.join(', ')}`);
+
+        const result_data = {
+            valid: parsed.valid,
+            reject: filteredReject,  // Use filtered reject list
+            confidence: parsed.confidence
+        };
 
         // Cache the result
-        await cacheKeywords(searchTerm, parsed);
+        await cacheKeywords(searchTerm, result_data);
 
-        return parsed;
+        return result_data;
     } catch (error) {
         console.error('[AI Generator] Keyword generation error:', error.message);
         return getFallbackKeywords(searchTerm);

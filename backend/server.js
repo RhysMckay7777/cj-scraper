@@ -4,7 +4,7 @@ const axios = require('axios');
 const fs = require('fs');
 const { searchCJProducts, getCJCategories, cancelScrape, generateScrapeId, MAX_OFFSET } = require('./cj-api-scraper');
 const { getCategoryIndex, searchCategories } = require('./category-service');
-const { mapSearchToCategories, generateDynamicKeywords } = require('./ai-keyword-generator');
+const { mapSearchToCategories, generateDynamicKeywords, clearCache: clearKeywordCache } = require('./ai-keyword-generator');
 
 // Gemini API Key for dynamic keyword generation
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
@@ -342,6 +342,16 @@ async function analyzeProductImage(imageUrl, searchTerm, imageIndex = 0, dynamic
 
 
 // Removed Puppeteer scraping - using CJ API exclusively for better reliability and speed
+
+// Clear keyword cache endpoint
+app.get('/api/clear-cache', async (req, res) => {
+  try {
+    await clearKeywordCache();
+    res.json({ success: true, message: 'Keyword cache cleared' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 // API Routes
 app.post('/api/scrape', async (req, res) => {
