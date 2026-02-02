@@ -394,9 +394,9 @@ app.post('/api/scrape', async (req, res) => {
     }
 
     // Apply image detection if enabled
-    // BATCH PROCESSING: Process 20 images at a time for speed (optimized for 2GB RAM)
-    // Batch size can be adjusted: 10 for 1GB, 20 for 2GB, 50 for 4GB+
-    const VISION_BATCH_SIZE = 20; // 20 parallel requests = fast but memory safe for 2GB
+    // BATCH PROCESSING: Process 50 images at a time for max speed (2GB RAM has headroom)
+    // Batch size: 10 for 1GB, 25 for 2GB (safe), 50 for 2GB (fast), 100 for 4GB+
+    const VISION_BATCH_SIZE = 50; // 50 parallel requests = max speed for 2GB
     let finalProducts = textFiltered;
     const SCRAPE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes max scrape time
     const scrapeStartTime = Date.now();
@@ -487,8 +487,7 @@ app.post('/api/scrape', async (req, res) => {
       filtered: finalProducts.length,
       passRate: ((finalProducts.length / apiResult.totalProducts) * 100).toFixed(1) + '%',
       products: finalProducts,
-      imageDetectionUsed: shouldUseVision,
-      imageDetectionSkipped: useImageDetection && !shouldUseVision ? `Auto-disabled: ${textFiltered.length} products exceeds ${MAX_PRODUCTS_FOR_VISION} limit` : null,
+      imageDetectionUsed: useImageDetection,
       scrapeId: scrapeId
     };
 
